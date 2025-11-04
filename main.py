@@ -2,7 +2,9 @@ import pygame,random
 from pygame.locals import *
 import numpy as np
 import math
-from agents import *
+from sea_environment import *
+
+
 
 
 
@@ -28,7 +30,7 @@ id = 0
 exit_flag = False
 my_world = World(screen)
 
-while not exit_flag:
+for step in range(100):
     keys = pygame.key.get_pressed()
 
     for event in pygame.event.get():
@@ -37,20 +39,20 @@ while not exit_flag:
             color = blue
             dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
             unit_vec_dir = dir / np.linalg.norm(dir)
-            my_world.add_uuv(mouse_x, mouse_y, unit_vec_dir, 2, color, id)
+            my_world.add_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, id)
             id += 1
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_g:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 color = yellow
-                my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), 2, color, id)
+                my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), 5, color, id)
                 id += 1
             if event.key == pygame.K_p:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 color = white
-                my_world.add_particle(mouse_x, mouse_y, 3, color, id)
+                my_world.add_particle(mouse_x, mouse_y, 7, color, id)
                 for uuv in my_world.uuvs:
-                    uuv.waypoints.append((mouse_x, mouse_y))
+                    uuv.add_waypoint((mouse_x, mouse_y))
                 id += 1
             if event.key == pygame.K_c:
                 my_world.uuvs = []
@@ -63,6 +65,9 @@ while not exit_flag:
             screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         if event.type == QUIT:
             exit_flag = True
+
+    if exit_flag:
+        break
 
     if my_world.controllable_uuv != None:
         if keys[pygame.K_w]:

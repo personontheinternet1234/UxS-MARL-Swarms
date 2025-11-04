@@ -28,7 +28,7 @@ class World():
         self.uuvs.append(UUV(x, y, direction, radius, color, self, self.screen, id))
 
     def add_controllable_uuv(self, x, y, direction, radius, color, id):
-        _controllable_uuv = UUV(x, y, direction, radius, color, self, self.screen, id)
+        _controllable_uuv = ControllableUUV(x, y, direction, radius, color, self, self.screen, id)
         self.uuvs.append(_controllable_uuv)
         self.controllable_uuv = _controllable_uuv
 
@@ -76,10 +76,28 @@ class UUV(Particle):
 
     def tick(self):
         super().tick()
-        pygame.draw.line(self.screen, self.color, (self.x, self.y), (self.x + 5*self.direction[0], self.y + 5*self.direction[1]), 1)
+        pygame.draw.line(self.screen, self.color, (self.x, self.y), (self.x + 10 * self.direction[0], self.y + 10 * self.direction[1]), 3)
 
+        self.go_to_waypoint()
+
+        self.acl_vec = np.add(self.acl_vec, -0.01 * self.vel_vec)  # friction
+
+        self.vel_vec = np.add(self.vel_vec, self.acl_vec)  # apply acceleration
+        self.vel_vec = np.add(random.uniform(-0.01, 0.01), self.vel_vec)  # randomness - current? idk
+
+        self.x = self.x + self.vel_vec[0]
+        self.y = self.y + self.vel_vec[1]
+
+        self.check_collision()
+
+        self.acl_vec = np.array([0,0])
+
+    def add_waypoint(self, waypoint):
+        self.waypoints.append(waypoint)
+
+    def go_to_waypoint(self):
         if len(self.waypoints) > 0:
-            if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < 5:
+            if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < (self.radius):
                 # arrived at waypoint
                 self.waypoints.pop(0)
                 self.vel_vec = np.array([0,0])
@@ -98,21 +116,6 @@ class UUV(Particle):
                         self.turn_right()
                     else:
                         self.turn_left()
-
-        self.acl_vec = np.add(self.acl_vec, -0.01 * self.vel_vec)  # friction
-
-        self.vel_vec = np.add(self.vel_vec, self.acl_vec)  # apply acceleration
-        self.vel_vec = np.add(random.uniform(-0.01,0.01), self.vel_vec)  # randomness - current? idk
-
-        self.x = self.x + self.vel_vec[0]
-        self.y = self.y + self.vel_vec[1]
-
-        self.check_collision()
-
-        self.acl_vec = np.array([0,0])
-
-    def go_to_waypoint(self, waypoint):
-        self.waypoints.append(waypoint)
 
     def increase_throttle(self, value=0.05):
         self.acl_vec = np.multiply(value, self.direction)
@@ -157,6 +160,29 @@ class UUV(Particle):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):  # will need to change later when targets aren't 1D
                     # explode
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+
+class ControllableUUV(UUV):
+
+    def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
+        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+
+    def tick(self):
+        Particle.tick(self)
+        pygame.draw.line(self.screen, self.color, (self.x, self.y), (self.x + 10 * self.direction[0], self.y + 10 * self.direction[1]), 3)
+
+        self.acl_vec = np.add(self.acl_vec, -0.01 * self.vel_vec)  # friction
+
+        self.vel_vec = np.add(self.vel_vec, self.acl_vec)  # apply acceleration
+        self.vel_vec = np.add(random.uniform(-0.01, 0.01), self.vel_vec)  # randomness - current? idk
+
+        self.x = self.x + self.vel_vec[0]
+        self.y = self.y + self.vel_vec[1]
+
+        self.check_collision()
+
+        self.acl_vec = np.array([0,0])
+
+
 
 class Explosion(Particle):
 
