@@ -30,7 +30,9 @@ id = 0
 exit_flag = False
 my_world = World(screen)
 
-for step in range(100):
+max_ticks = 100000
+
+for tick in range(max_ticks):
     keys = pygame.key.get_pressed()
 
     for event in pygame.event.get():
@@ -39,7 +41,7 @@ for step in range(100):
             color = blue
             dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
             unit_vec_dir = dir / np.linalg.norm(dir)
-            my_world.add_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, id)
+            my_world.add_vatn_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, id)
             id += 1
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_g:
@@ -52,7 +54,8 @@ for step in range(100):
                 color = white
                 my_world.add_particle(mouse_x, mouse_y, 7, color, id)
                 for uuv in my_world.uuvs:
-                    uuv.add_waypoint((mouse_x, mouse_y))
+                    if isinstance(uuv, VatnUUV):
+                        uuv.add_waypoint((mouse_x, mouse_y))
                 id += 1
             if event.key == pygame.K_c:
                 my_world.uuvs = []
