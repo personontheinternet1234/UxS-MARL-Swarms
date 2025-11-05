@@ -142,16 +142,12 @@ my_world = World(screen)
 # Hyperparameters
 state_dim = 9
 action_dim = 2
-max_action = 50.0
+max_action = 25
 batch_size = 200
-noise = 0.3
-noise_decay = 0.9995
+noise = 0.5
+noise_decay = 0.995
 noise_min = 0.01
-
 gamma = 0.95
-epsilon = 1.0
-epsilon_min = 0.05
-epsilon_decay = 0.995
 lr = 1e-3
 
 # Time stuff
@@ -161,10 +157,16 @@ my_world.use_policy_after = 10  # policy & training is used this many ticks (rig
 episodes = 1000
 
 # Outside stuff
-maddpg_agent = load_weights(False)
-show_sim = False
-maddpg_agent = load_weights(True)
-show_sim = True
+load_weights_ans = input("Load Weights? (y/n): ")
+show_sim_ans = input("Show Sim? (y/n): ")
+if load_weights_ans == "y":
+    maddpg_agent = load_weights(True)
+else:
+    maddpg_agent = load_weights(False)
+if show_sim_ans == "y":
+    show_sim = True
+else:
+    show_sim = False
 
 # Replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
@@ -186,8 +188,8 @@ for episode in range(episodes):
         unit_vec_dir = dir / np.linalg.norm(dir)
         my_world.add_vatn_uuv(x, y, unit_vec_dir, 5, blue, maddpg_agent)
 
-    num_enemies = 5
-    for i in range(num_agents):
+    num_enemies = 7
+    for i in range(num_enemies):
         enemy_x = random.randint(100, 400)
         enemy_y = random.randint(100, 400)
         my_world.add_controllable_uuv(enemy_x, enemy_y, np.array([1,0]), 5, yellow, 0)
@@ -240,15 +242,21 @@ for episode in range(episodes):
             if keys[pygame.K_d]:
                 my_world.controllable_uuv.turn_right()
 
-        #####
-        #####
-        #####
+        # Agent made a decision, now learn
         if tick % my_world.use_policy_after == 0:
+            # prev_states = []
+            # prev_actions = []
+            # for uuv in my_world.uuvs:
+            #     if isinstance(uuv, VatnUUV):
+            #         prev_states.append(uuv.get_state())
             prev_states = []
             prev_actions = []
+            prev_agent_ids = []
             for uuv in my_world.uuvs:
                 if isinstance(uuv, VatnUUV):
                     prev_states.append(uuv.get_state())
+                    prev_actions.append(uuv.current_action)
+                    prev_agent_ids.append(uuv.id)
 
         # Step environment
         screen.fill(black)
@@ -259,22 +267,29 @@ for episode in range(episodes):
             next_states = []
             rewards = []
             dones = []
+            current_ids = {u.id for u in my_world.uuvs if isinstance(u, VatnUUV)}
+            surviving_agents = [u for u in my_world.uuvs if isinstance(u, VatnUUV)]
 
-            for i, uuv in enumerate([u for u in my_world.uuvs if isinstance(u, VatnUUV)]):
-                if i < len(prev_states):
-                    next_states.append(uuv.get_state())
-                    rewards.append(uuv.current_reward)
-                    dones.append(False)  # Episode ends by max_ticks
+            for i, agent_id in enumerate(prev_agent_ids):
+                if agent_id in current_ids:
+                    # Agent survived - find them and get next state
+                    uuv = next(u for u in surviving_agents if u.id == agent_id)
+                    next_state = uuv.get_state()
+                    reward = my_world.get_and_clear_reward(agent_id)
 
-                    if uuv.current_action is not None:
-                        prev_actions.append(uuv.current_action)
+                    if prev_actions[i] is not None:
+                        replay_buffer.add(prev_states[i], prev_actions[i],
+                                        reward, next_state, False)
+                        episode_reward += reward
+                else:
+                    # Agent was removed - terminal transition
+                    reward = my_world.get_and_clear_reward(agent_id)
 
-            # Add to replay buffer
-            if len(prev_states) == len(next_states) == len(prev_actions):
-                for i in range(len(prev_states)):
-                    replay_buffer.add(prev_states[i], prev_actions[i],
-                                    rewards[i], next_states[i], dones[i])
-                    episode_reward += rewards[i]
+                    if prev_actions[i] is not None:
+                        # Use prev_state as next_state for terminal
+                        replay_buffer.add(prev_states[i], prev_actions[i],
+                                        reward, prev_states[i], True)  # done=True
+                        episode_reward += reward
 
             # Training step
             if len(replay_buffer) > update_after:

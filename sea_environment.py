@@ -24,13 +24,19 @@ class World():
 
         self.id_tracker = 0
 
-        # self.gamma = 0.95
-        # self.epsilon = 1.0
-        # self.epsilon_min = 0.05
-        # self.epsilon_decay = 0.995
-        # self.lr = 1e-3
+        self.agent_rewards = {}  # {agent_id: reward}
 
         self.use_policy_after = 50
+
+    def get_and_clear_reward(self, agent_id):
+        """Get accumulated reward and reset"""
+        reward = self.agent_rewards.get(agent_id, 0)
+        self.agent_rewards[agent_id] = 0  # Reset to default
+        return reward
+
+    def set_reward(self, agent_id, reward):
+        """Accumulate rewards for an agent"""
+        self.agent_rewards[agent_id] = reward
 
     def add_particle(self, x, y, radius, color):
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
@@ -64,6 +70,7 @@ class World():
         self.particles = []
         self.explosions = []
         self.controllable_uuv = None
+        self.agent_rewards = {}
         self.id_tracker = 0
 
 class Particle:
@@ -167,8 +174,6 @@ class VatnUUV(UUV):
 
         self.maddpg_agent = maddpg_agent
 
-        self.current_reward = 0
-
         self.current_action = None
 
         self.tick_counter = 0
@@ -177,7 +182,7 @@ class VatnUUV(UUV):
 
     def tick(self):
         self.tick_counter += 1
-        self.current_reward = -0.1 # assume nothing happens
+        self.world.set_reward(self.id, -0.1)
 
         # observing
         self.collect_observations()
@@ -258,22 +263,18 @@ class VatnUUV(UUV):
                         self.turn_left()
 
     def check_collision(self):
-        collision_reward = 0
-
         for u in self.world.uuvs:
             if u.id != self.id:
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, ControllableUUV):
-                        collision_reward = 10
+                        self.world.set_reward(self.id, 10)
                     elif isinstance(u, VatnUUV):
                         ...
 
-        if collision_reward != 0:
-            self.current_reward = collision_reward
-            for e in self.world.explosions:
-                if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
-                    try_to_remove(self.world.uuvs, self)
+        for e in self.world.explosions:
+            if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
+                try_to_remove(self.world.uuvs, self)
 
 class ControllableUUV(UUV):
 
