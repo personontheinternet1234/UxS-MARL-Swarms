@@ -131,7 +131,7 @@ black = (0,0,0)
 white = (255, 255, 255)
 blue = (50,50,160)
 red = (160, 50, 50)
-yellow = (160, 160, 50)
+yellow = (100, 100, 10)
 color_var = white
 clock = pygame.time.Clock()
 pygame.display.set_caption("Particle Sim")
@@ -139,7 +139,7 @@ pygame.display.set_caption("Particle Sim")
 # Sim / env
 my_world = World(screen)
 num_agents = 5
-num_enemies = 15
+num_enemies = 7
 
 # Hyperparameters
 state_dim = 12

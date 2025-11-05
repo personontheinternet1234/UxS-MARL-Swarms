@@ -265,7 +265,7 @@ class VatnUUV(UUV):
                 self.vel_vec = np.array([0,0])
             else:
                 # not yet arrived at waypoint
-                pygame.draw.line(self.screen, np.multiply(self.color, 0.5), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 1)
+                pygame.draw.line(self.screen, (255, 0, 0), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
 
                 current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
                 desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
@@ -302,14 +302,14 @@ class ControllableUUV(UUV):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
     def tick(self):
-        self.color = (160, 160, 50)
+        self.color = (100, 100, 10)
         for vatnuuv in self.world.uuvs:
             if isinstance(vatnuuv, VatnUUV):
                 vatnuuv_current_angle = math.atan2(vatnuuv.direction[1], vatnuuv.direction[0]) * 180 / math.pi
                 vatnuuv_angle_to_enemy = math.atan2(self.y - vatnuuv.y, self.x - vatnuuv.x) * 180 / math.pi
                 angle_diff = abs(vatnuuv_angle_to_enemy - vatnuuv_current_angle)
                 if angle_diff < vatnuuv.observation_cone:
-                    self.color = (255, 0, 0)
+                    self.color = (255, 255, 50)
 
         super().tick()
 
