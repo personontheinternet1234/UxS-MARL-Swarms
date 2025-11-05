@@ -107,7 +107,7 @@ class UUV(Particle):
         pygame.draw.line(self.screen, self.color, (self.x, self.y), (self.x + 10 * self.direction[0], self.y + 10 * self.direction[1]), 1)
 
         # calculate physics
-        self.acl_vec = np.add(self.acl_vec, -0.01 * self.vel_vec)  # friction
+        self.acl_vec = np.add(self.acl_vec, -0.05 * self.vel_vec)  # friction
         self.vel_vec = np.add(self.vel_vec, self.acl_vec)  # apply acceleration
         self.vel_vec = np.add(random.uniform(-0.01, 0.01), self.vel_vec)  # randomness - current? idk
 
@@ -182,7 +182,7 @@ class VatnUUV(UUV):
 
     def tick(self):
         self.tick_counter += 1
-        self.world.set_reward(self.id, -0.01)
+        self.world.set_reward(self.id, -0.05)
 
         # observing
         self.collect_observations()
@@ -208,9 +208,14 @@ class VatnUUV(UUV):
 
         delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
 
+        my_mesh_observations = self.observations
+        for vatnuuv in self.world.uuvs:
+            if isinstance(vatnuuv, VatnUUV) and vatnuuv.id != self.id:
+                my_mesh_observations += vatnuuv.observations
+
         smallest_dist = float("inf")
         closest_enemy = [0, 0, 0]
-        for observation in self.observations:
+        for observation in my_mesh_observations:
             tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
             if tested_dist < smallest_dist:
                 smallest_dist = tested_dist
@@ -266,7 +271,8 @@ class VatnUUV(UUV):
 
                 if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
                     if np.linalg.norm(self.vel_vec) < 1:  # if not yet at max speed
-                        self.increase_throttle()
+                        self.increase_throttle(0.1)
+                        # self.increase_throttle(0.05)
                 else:
                     if angle_diff > 0:
                         self.turn_right()

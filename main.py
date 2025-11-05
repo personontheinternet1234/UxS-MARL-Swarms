@@ -138,17 +138,17 @@ pygame.display.set_caption("Particle Sim")
 
 # Sim / env
 my_world = World(screen)
-num_agents = 20
-num_enemies = 10
+num_agents = 5
+num_enemies = 15
 
 # Hyperparameters
 state_dim = 12
 action_dim = 2
-max_action = 10
+max_action = 20
 batch_size = 200
 noise = 0.5
 noise_decay = 0.995
-noise_min = 0.01
+noise_min = 0.001
 gamma = 0.95
 lr = 1e-3
 
@@ -244,11 +244,6 @@ for episode in range(episodes):
 
         # Agent made a decision, now learn
         if tick % my_world.use_policy_after == 0:
-            # prev_states = []
-            # prev_actions = []
-            # for uuv in my_world.uuvs:
-            #     if isinstance(uuv, VatnUUV):
-            #         prev_states.append(uuv.get_state())
             prev_states = []
             prev_actions = []
             prev_agent_ids = []
@@ -346,7 +341,7 @@ for episode in range(episodes):
     if episode_critic_loss:
         critic_losses.append(np.mean(episode_critic_loss))
 
-    if episode % 10 == 0:
+    if episode % 5 == 0:
         avg_reward = np.mean(episode_rewards[-10:])
         print(f"Episode {episode:04d} | Avg Reward: {avg_reward:.2f} | Noise: {noise:.3f} | Buffer: {len(replay_buffer)}")
         if actor_losses:
