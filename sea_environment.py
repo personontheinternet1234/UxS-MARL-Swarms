@@ -178,11 +178,11 @@ class VatnUUV(UUV):
 
         self.tick_counter = 0
 
-        self.observation_cone = 180
+        self.observation_cone = 90
 
     def tick(self):
         self.tick_counter += 1
-        self.world.set_reward(self.id, -0.1)
+        self.world.set_reward(self.id, -0.01)
 
         # observing
         self.collect_observations()
@@ -198,6 +198,17 @@ class VatnUUV(UUV):
     def get_state(self):
         """Returns the current state vector"""
         smallest_dist = float("inf")
+        closest_friendly = [0, 0, 0]
+        for vatnuuv in self.world.uuvs:
+            if isinstance(vatnuuv, VatnUUV) and vatnuuv.id != self.id:
+                tested_dist = distance((self.x, self.y), (vatnuuv.x, vatnuuv.y))
+                if tested_dist < smallest_dist:
+                    smallest_dist = tested_dist
+                    closest_friendly = [vatnuuv.x, vatnuuv.y, 1]
+
+        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
+
+        smallest_dist = float("inf")
         closest_enemy = [0, 0, 0]
         for observation in self.observations:
             tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
@@ -207,7 +218,7 @@ class VatnUUV(UUV):
 
         delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2]]
 
-        return np.hstack([delta_enemy, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
+        return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
 
     def take_action(self):
         state = self.get_state()
@@ -270,7 +281,7 @@ class VatnUUV(UUV):
                     if isinstance(u, ControllableUUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, VatnUUV):
-                        ...
+                        self.world.set_reward(self.id, -0.5)
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -282,6 +293,15 @@ class ControllableUUV(UUV):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
     def tick(self):
+        self.color = (160, 160, 50)
+        for vatnuuv in self.world.uuvs:
+            if isinstance(vatnuuv, VatnUUV):
+                vatnuuv_current_angle = math.atan2(vatnuuv.direction[1], vatnuuv.direction[0]) * 180 / math.pi
+                vatnuuv_angle_to_enemy = math.atan2(self.y - vatnuuv.y, self.x - vatnuuv.x) * 180 / math.pi
+                angle_diff = abs(vatnuuv_angle_to_enemy - vatnuuv_current_angle)
+                if angle_diff < vatnuuv.observation_cone:
+                    self.color = (255, 0, 0)
+
         super().tick()
 
 class Explosion(Particle):

@@ -86,7 +86,7 @@ class Critic(nn.Module):
 
 def load_weights(flag):
     if flag:
-        checkpoint = torch.load("maddpg_weights.pth", weights_only=False)
+        checkpoint = torch.load("models/maddpg_weights.pth", weights_only=False)
         params = checkpoint['hyperparameters']
         maddpg_agent = MADDPGAgent(
             params['state_dim'],
@@ -138,11 +138,13 @@ pygame.display.set_caption("Particle Sim")
 
 # Sim / env
 my_world = World(screen)
+num_agents = 20
+num_enemies = 10
 
 # Hyperparameters
-state_dim = 9
+state_dim = 12
 action_dim = 2
-max_action = 25
+max_action = 10
 batch_size = 200
 noise = 0.5
 noise_decay = 0.995
@@ -180,7 +182,6 @@ exit_flag = False
 for episode in range(episodes):
     my_world.reset()
 
-    num_agents = 3
     for i in range(num_agents):
         x = random.randint(50, 450)
         y = random.randint(50, 450)
@@ -188,7 +189,6 @@ for episode in range(episodes):
         unit_vec_dir = dir / np.linalg.norm(dir)
         my_world.add_vatn_uuv(x, y, unit_vec_dir, 5, blue, maddpg_agent)
 
-    num_enemies = 7
     for i in range(num_enemies):
         enemy_x = random.randint(100, 400)
         enemy_y = random.randint(100, 400)
@@ -359,7 +359,7 @@ pygame.quit()
 
 # Saving Weights
 print("Training Done")
-save_path = "maddpg_weights.pth"
+save_path = "models/maddpg_weights.pth"
 torch.save({
     'actor_state_dict': maddpg_agent.actor.state_dict(),
     'actor_target_state_dict': maddpg_agent.actor_target.state_dict(),
@@ -385,7 +385,7 @@ print(f"\nModel weights saved to {save_path}")
 
 # Also save training metrics separately
 import json
-metrics_path = "training_metrics.json"
+metrics_path = "models/training_metrics.json"
 with open(metrics_path, 'w') as f:
     json.dump({
         'episode_rewards': episode_rewards,
