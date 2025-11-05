@@ -2,12 +2,10 @@ import pygame,random
 from pygame.locals import *
 import numpy as np
 import math
-
-def normalize_vector_l2(vector):
-    norm = np.linalg.norm(vector)
-    if norm == 0:
-        return vector
-    return vector / norm
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 
 
 class World():
@@ -21,16 +19,31 @@ class World():
 
         self.controllable_uuv = None
 
-    def add_particle(self, x, y, radius, color, id):
+        self.screen_width = self.screen.get_size()[0]
+        self.screen_height = self.screen.get_size()[1]
+
+        self.id_tracker = 0
+
+        # self.gamma = 0.95
+        # self.epsilon = 1.0
+        # self.epsilon_min = 0.05
+        # self.epsilon_decay = 0.995
+        # self.lr = 1e-3
+
+        self.use_policy_after = 50
+
+    def add_particle(self, x, y, radius, color):
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
 
-    def add_vatn_uuv(self, x, y, direction, radius, color, id):
-        self.uuvs.append(VatnUUV(x, y, direction, radius, color, self, self.screen, id))
+    def add_vatn_uuv(self, x, y, direction, radius, color, policy_net):
+        self.uuvs.append(VatnUUV(x, y, direction, radius, color, policy_net, self, self.screen, self.id_tracker))
+        self.id_tracker += 1
 
     def add_controllable_uuv(self, x, y, direction, radius, color, id):
-        _controllable_uuv = ControllableUUV(x, y, direction, radius, color, self, self.screen, id)
+        _controllable_uuv = ControllableUUV(x, y, direction, radius, color, self, self.screen, self.id_tracker)
         self.uuvs.append(_controllable_uuv)
         self.controllable_uuv = _controllable_uuv
+        self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
         self.explosions.append(Explosion(x, y, duration, radius, color, self, self.screen))
@@ -42,6 +55,16 @@ class World():
             u.tick()
         for e in self.explosions:
             e.tick()
+
+        self.screen_width = self.screen.get_size()[0]
+        self.screen_height = self.screen.get_size()[1]
+
+    def reset(self):
+        self.uuvs = []
+        self.particles = []
+        self.explosions = []
+        self.controllable_uuv = None
+        self.id_tracker = 0
 
 class Particle:
 
@@ -116,12 +139,12 @@ class UUV(Particle):
                 try_to_remove(self.world.uuvs, self)
 
         # wall collision y vector switch bc pygame down is positive
-        if self.x > self.screen.get_size()[0] - 10:
-            self.x = self.screen.get_size()[0] - 10
+        if self.x > self.world.screen_width - 10:
+            self.x = self.world.screen_width - 10
         if self.x < 10:
             self.x = 10
-        if self.y > self.screen.get_size()[1] - 10:
-            self.y = self.screen.get_size()[1] - 10
+        if self.y > self.world.screen_height - 10:
+            self.y = self.world.screen_height - 10
         if self.y < 10:
             self.y = 10
 
@@ -129,45 +152,85 @@ class UUV(Particle):
         # if self.y < self.screen.get_size()[1] - 10 and self.y > 10 and self.x < self.screen.get_size()[0] - 10 and self.x > 10:
         for u in self.world.uuvs:
             if u.id != self.id:
-                if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):  # will need to change later when targets aren't 1D
+                if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):  # will need to change later when enemies aren't 1D
                     # explode
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
 
 class VatnUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, color, maddpg_agent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
         self.waypoints = []
 
         self.observations = []
 
+        self.maddpg_agent = maddpg_agent
+
+        self.current_reward = 0
+
+        self.current_action = None
+
+        self.tick_counter = 0
+
+        self.observation_cone = 180
 
     def tick(self):
+        self.tick_counter += 1
+        self.current_reward = -0.1 # assume nothing happens
+
         # observing
         self.collect_observations()
 
         # decision making
-
+        if self.tick_counter % self.world.use_policy_after == 0:
+            self.take_action()
         self.go_to_waypoint()
 
-        # physics
+        # physics, collision
         super().tick()
 
+    def get_state(self):
+        """Returns the current state vector"""
+        smallest_dist = float("inf")
+        closest_enemy = [0, 0, 0]
+        for observation in self.observations:
+            tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
+            if tested_dist < smallest_dist:
+                smallest_dist = tested_dist
+                closest_enemy = [observation[0], observation[1], 1]
+
+        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2]]
+
+        return np.hstack([delta_enemy, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
+
     def take_action(self):
-        ...
+        state = self.get_state()
+        action = self.maddpg_agent.select_action(state)
+        delta_x, delta_y = action
+        self.waypoints = []
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
+        self.current_action = action
 
     def collect_observations(self):
         self.observations = []
         for enemy in self.world.uuvs:
             if isinstance(enemy, ControllableUUV):
                 current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
-                angle_to_enemy = math.atan2(enemy.x - self.y, enemy.y - self.x) * 180 / math.pi
+                angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)
-                if angle_diff < 30:
+                if angle_diff < self.observation_cone:
                     self.observations.append((enemy.x, enemy.y))
 
     def add_waypoint(self, waypoint):
+        if waypoint[0] < 10:
+            waypoint[0] = 10
+        if waypoint[0] > self.world.screen_width - 10:
+            waypoint[0] = self.world.screen_width - 10
+        if waypoint[1] < 10:
+            waypoint[1] = 10
+        if waypoint[1] > self.world.screen_height - 10:
+            waypoint[1] = self.world.screen_height - 10
         self.waypoints.append(waypoint)
 
     def go_to_waypoint(self):
@@ -194,6 +257,24 @@ class VatnUUV(UUV):
                     else:
                         self.turn_left()
 
+    def check_collision(self):
+        collision_reward = 0
+
+        for u in self.world.uuvs:
+            if u.id != self.id:
+                if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
+                    self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+                    if isinstance(u, ControllableUUV):
+                        collision_reward = 10
+                    elif isinstance(u, VatnUUV):
+                        ...
+
+        if collision_reward != 0:
+            self.current_reward = collision_reward
+            for e in self.world.explosions:
+                if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
+                    try_to_remove(self.world.uuvs, self)
+
 class ControllableUUV(UUV):
 
     def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
@@ -213,6 +294,12 @@ class Explosion(Particle):
         self.lifetime -= 1
         if self.lifetime <=0 :
             try_to_remove(self.world.explosions, self)
+
+def normalize_vector_l2(vector):
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        return vector
+    return vector / norm
 
 def try_to_remove(list, object):
     try:
