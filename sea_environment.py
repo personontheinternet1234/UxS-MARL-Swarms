@@ -208,10 +208,13 @@ class VatnUUV(UUV):
 
         delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
 
-        my_mesh_observations = self.observations
+        # np helps for speed here
+        my_mesh_observations = []
         for vatnuuv in self.world.uuvs:
-            if isinstance(vatnuuv, VatnUUV) and vatnuuv.id != self.id:
-                my_mesh_observations += vatnuuv.observations
+            if isinstance(vatnuuv, VatnUUV) and len(vatnuuv.observations) > 0:
+                my_mesh_observations.append(vatnuuv.observations)
+        if len(my_mesh_observations) > 0:
+            my_mesh_observations = np.concatenate(my_mesh_observations)
 
         smallest_dist = float("inf")
         closest_enemy = [0, 0, 0]
@@ -241,7 +244,7 @@ class VatnUUV(UUV):
                 angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)
                 if angle_diff < self.observation_cone:
-                    self.observations.append((enemy.x, enemy.y))
+                    self.observations.append([enemy.x, enemy.y])
 
     def add_waypoint(self, waypoint):
         if waypoint[0] < 10:
