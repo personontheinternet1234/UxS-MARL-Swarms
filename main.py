@@ -138,8 +138,8 @@ pygame.display.set_caption("Particle Sim")
 
 # Sim / env
 my_world = World(screen)
-num_agents = 5
-num_enemies = 7
+default_num_agents = 5
+default_num_enemies = 7
 
 # Hyperparameters
 state_dim = 12
@@ -159,8 +159,17 @@ my_world.use_policy_after = 10  # policy & training is used this many ticks (rig
 episodes = 1000
 
 # Outside stuff
-load_weights_ans = input("Load Weights? (y/n): ")
-show_sim_ans = input("Show Sim? (y/n): ")
+load_weights_ans = 0
+show_sim_ans = 0
+save_weights_ans = 0
+num_agents = input("How Many Agents? (int): ")
+num_enemies = input("How Many Enemies? (int): ")
+
+while load_weights_ans != "y" and load_weights_ans != "n":
+    load_weights_ans = input("Load Weights? (y/n): ")
+while show_sim_ans != "y" and load_weights_ans != "n":
+    show_sim_ans = input("Show Sim? (y/n): ")
+
 if load_weights_ans == "y":
     maddpg_agent = load_weights(True)
 else:
@@ -169,6 +178,10 @@ if show_sim_ans == "y":
     show_sim = True
 else:
     show_sim = False
+if num_agents == "":
+    num_agents = 5
+if num_enemies == "":
+    num_enemies = 7
 
 # Replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
@@ -230,6 +243,8 @@ for episode in range(episodes):
                 exit_flag = True
 
         if exit_flag:
+            while save_weights_ans != "y" and save_weights_ans != "n":
+                save_weights_ans = input("Save Weights? (y/n): ")
             break
 
         if my_world.controllable_uuv != None:
@@ -352,39 +367,45 @@ for episode in range(episodes):
 
 pygame.quit()
 
-# Saving Weights
-print("Training Done")
-save_path = "models/maddpg_weights.pt"
-torch.save({
-    'actor_state_dict': maddpg_agent.actor.state_dict(),
-    'actor_target_state_dict': maddpg_agent.actor_target.state_dict(),
-    'critic_state_dict': maddpg_agent.critic.state_dict() if maddpg_agent.critic else None,
-    'critic_target_state_dict': maddpg_agent.critic_target.state_dict() if maddpg_agent.critic_target else None,
-    'actor_optimizer_state_dict': maddpg_agent.actor_optimizer.state_dict(),
-    'critic_optimizer_state_dict': maddpg_agent.critic_optimizer.state_dict() if maddpg_agent.critic_optimizer else None,
-    'episode': episodes,
-    'episode_rewards': episode_rewards,
-    'actor_losses': actor_losses,
-    'critic_losses': critic_losses,
-    'hyperparameters': {
-        'state_dim': state_dim,
-        'action_dim': action_dim,
-        'max_action': max_action,
-        'gamma': maddpg_agent.gamma,
-        'tau': maddpg_agent.tau,
-        'lr_actor': lr,
-        'lr_critic': lr
-    }
-}, save_path)
-print(f"\nModel weights saved to {save_path}")
-
-# Also save training metrics separately
-import json
-metrics_path = "models/training_metrics.json"
-with open(metrics_path, 'w') as f:
-    json.dump({
+def save_weights():
+    # Saving Weights
+    print("Training Done")
+    save_path = "models/maddpg_weights.pt"
+    torch.save({
+        'actor_state_dict': maddpg_agent.actor.state_dict(),
+        'actor_target_state_dict': maddpg_agent.actor_target.state_dict(),
+        'critic_state_dict': maddpg_agent.critic.state_dict() if maddpg_agent.critic else None,
+        'critic_target_state_dict': maddpg_agent.critic_target.state_dict() if maddpg_agent.critic_target else None,
+        'actor_optimizer_state_dict': maddpg_agent.actor_optimizer.state_dict(),
+        'critic_optimizer_state_dict': maddpg_agent.critic_optimizer.state_dict() if maddpg_agent.critic_optimizer else None,
+        'episode': episodes,
         'episode_rewards': episode_rewards,
         'actor_losses': actor_losses,
-        'critic_losses': critic_losses
-    }, f, indent=2)
-print(f"Training metrics saved to {metrics_path}")
+        'critic_losses': critic_losses,
+        'hyperparameters': {
+            'state_dim': state_dim,
+            'action_dim': action_dim,
+            'max_action': max_action,
+            'gamma': maddpg_agent.gamma,
+            'tau': maddpg_agent.tau,
+            'lr_actor': lr,
+            'lr_critic': lr
+        }
+    }, save_path)
+    print(f"\nModel weights saved to {save_path}")
+
+    # Also save training metrics separately
+    import json
+    metrics_path = "models/training_metrics.json"
+    with open(metrics_path, 'w') as f:
+        json.dump({
+            'episode_rewards': episode_rewards,
+            'actor_losses': actor_losses,
+            'critic_losses': critic_losses
+        }, f, indent=2)
+    print(f"Training metrics saved to {metrics_path}")
+
+if save_weights_ans == "y":
+    save_weights()
+else:
+    print("Did not save weights.")
