@@ -1,5 +1,4 @@
 *DS_STORE*
 __pycache__
 models/training_metrics.json
-models/maddpg_weights.pth
-models/GOOD_WEIGHTS.pth
+models/maddpg_weights.pt

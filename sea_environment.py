@@ -41,8 +41,8 @@ class World():
     def add_particle(self, x, y, radius, color):
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
 
-    def add_vatn_uuv(self, x, y, direction, radius, color, policy_net):
-        self.uuvs.append(VatnUUV(x, y, direction, radius, color, policy_net, self, self.screen, self.id_tracker))
+    def add_swarm_uuv(self, x, y, direction, radius, color, policy_net):
+        self.uuvs.append(SwarmUUV(x, y, direction, radius, color, policy_net, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
     def add_controllable_uuv(self, x, y, direction, radius, color, id):
@@ -163,7 +163,7 @@ class UUV(Particle):
                     # explode
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
 
-class VatnUUV(UUV):
+class SwarmUUV(UUV):
 
     def __init__(self, startx, starty, direction, radius, color, maddpg_agent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
@@ -182,7 +182,7 @@ class VatnUUV(UUV):
 
     def tick(self):
         self.tick_counter += 1
-        self.world.set_reward(self.id, -0.05)
+        self.world.set_reward(self.id, -100)
 
         # observing
         self.collect_observations()
@@ -199,20 +199,20 @@ class VatnUUV(UUV):
         """Returns the current state vector"""
         smallest_dist = float("inf")
         closest_friendly = [0, 0, 0]
-        for vatnuuv in self.world.uuvs:
-            if isinstance(vatnuuv, VatnUUV) and vatnuuv.id != self.id:
-                tested_dist = distance((self.x, self.y), (vatnuuv.x, vatnuuv.y))
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
+                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
                 if tested_dist < smallest_dist:
                     smallest_dist = tested_dist
-                    closest_friendly = [vatnuuv.x, vatnuuv.y, 1]
+                    closest_friendly = [swarmuuv.x, swarmuuv.y, 1]
 
         delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
 
         # np helps for speed here
         my_mesh_observations = []
-        for vatnuuv in self.world.uuvs:
-            if isinstance(vatnuuv, VatnUUV) and len(vatnuuv.observations) > 0:
-                my_mesh_observations.append(vatnuuv.observations)
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV) and len(swarmuuv.observations) > 0:
+                my_mesh_observations.append(swarmuuv.observations)
         if len(my_mesh_observations) > 0:
             my_mesh_observations = np.concatenate(my_mesh_observations)
 
@@ -288,8 +288,8 @@ class VatnUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, ControllableUUV):
-                        self.world.set_reward(self.id, 10)
-                    elif isinstance(u, VatnUUV):
+                        self.world.set_reward(self.id, 1000)
+                    elif isinstance(u, SwarmUUV):
                         self.world.set_reward(self.id, -0.5)
 
         for e in self.world.explosions:
@@ -303,12 +303,12 @@ class ControllableUUV(UUV):
 
     def tick(self):
         self.color = (100, 100, 10)
-        for vatnuuv in self.world.uuvs:
-            if isinstance(vatnuuv, VatnUUV):
-                vatnuuv_current_angle = math.atan2(vatnuuv.direction[1], vatnuuv.direction[0]) * 180 / math.pi
-                vatnuuv_angle_to_enemy = math.atan2(self.y - vatnuuv.y, self.x - vatnuuv.x) * 180 / math.pi
-                angle_diff = abs(vatnuuv_angle_to_enemy - vatnuuv_current_angle)
-                if angle_diff < vatnuuv.observation_cone:
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV):
+                swarmuuv_current_angle = math.atan2(swarmuuv.direction[1], swarmuuv.direction[0]) * 180 / math.pi
+                swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
+                angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
+                if angle_diff < swarmuuv.observation_cone:
                     self.color = (255, 255, 50)
 
         super().tick()

@@ -86,7 +86,7 @@ class Critic(nn.Module):
 
 def load_weights(flag):
     if flag:
-        checkpoint = torch.load("models/maddpg_weights.pth", weights_only=False)
+        checkpoint = torch.load("models/maddpg_weights.pt", weights_only=False)
         params = checkpoint['hyperparameters']
         maddpg_agent = MADDPGAgent(
             params['state_dim'],
@@ -187,7 +187,7 @@ for episode in range(episodes):
         y = random.randint(50, 450)
         dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
         unit_vec_dir = dir / np.linalg.norm(dir)
-        my_world.add_vatn_uuv(x, y, unit_vec_dir, 5, blue, maddpg_agent)
+        my_world.add_swarm_uuv(x, y, unit_vec_dir, 5, blue, maddpg_agent)
 
     for i in range(num_enemies):
         enemy_x = random.randint(100, 400)
@@ -208,7 +208,7 @@ for episode in range(episodes):
                 color = blue
                 dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
                 unit_vec_dir = dir / np.linalg.norm(dir)
-                my_world.add_vatn_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, maddpg_agent)
+                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, maddpg_agent)
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_g:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -219,7 +219,7 @@ for episode in range(episodes):
                     color = white
                     my_world.add_particle(mouse_x, mouse_y, 7, color)
                     for uuv in my_world.uuvs:
-                        if isinstance(uuv, VatnUUV):
+                        if isinstance(uuv, SwarmUUV):
                             uuv.add_waypoint((mouse_x, mouse_y))
                 if event.key == pygame.K_c:
                     my_world.reset()
@@ -248,7 +248,7 @@ for episode in range(episodes):
             prev_actions = []
             prev_agent_ids = []
             for uuv in my_world.uuvs:
-                if isinstance(uuv, VatnUUV):
+                if isinstance(uuv, SwarmUUV):
                     prev_states.append(uuv.get_state())
                     prev_actions.append(uuv.current_action)
                     prev_agent_ids.append(uuv.id)
@@ -262,8 +262,8 @@ for episode in range(episodes):
             next_states = []
             rewards = []
             dones = []
-            current_ids = {u.id for u in my_world.uuvs if isinstance(u, VatnUUV)}
-            surviving_agents = [u for u in my_world.uuvs if isinstance(u, VatnUUV)]
+            current_ids = {u.id for u in my_world.uuvs if isinstance(u, SwarmUUV)}
+            surviving_agents = [u for u in my_world.uuvs if isinstance(u, SwarmUUV)]
 
             for i, agent_id in enumerate(prev_agent_ids):
                 if agent_id in current_ids:
@@ -354,7 +354,7 @@ pygame.quit()
 
 # Saving Weights
 print("Training Done")
-save_path = "models/maddpg_weights.pth"
+save_path = "models/maddpg_weights.pt"
 torch.save({
     'actor_state_dict': maddpg_agent.actor.state_dict(),
     'actor_target_state_dict': maddpg_agent.actor_target.state_dict(),
