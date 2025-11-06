@@ -182,7 +182,7 @@ class SwarmUUV(UUV):
 
     def tick(self):
         self.tick_counter += 1
-        self.world.set_reward(self.id, -100)
+        self.world.set_reward(self.id, -0.05)
 
         # observing
         self.collect_observations()
@@ -288,7 +288,7 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, ControllableUUV):
-                        self.world.set_reward(self.id, 1000)
+                        self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
                         self.world.set_reward(self.id, -0.5)
 
