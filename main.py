@@ -163,7 +163,7 @@ load_weights_ans = 0
 show_sim_ans = 0
 save_weights_ans = 0
 num_agents_ans = input("How Many Agents? (int): ")
-num_agents_ans = input("How Many Enemies? (int): ")
+num_enemies_ans = input("How Many Enemies? (int): ")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
@@ -180,8 +180,12 @@ else:
     show_sim = False
 if num_agents_ans == "":
     num_agents = default_num_agents
-if num_agents_ans == "":
+else:
+    num_agents = int(num_agents_ans)
+if num_enemies_ans == "":
     num_enemies = default_num_enemies
+else:
+    num_enemies = int(num_enemies_ans)
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
