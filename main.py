@@ -34,14 +34,14 @@ class MADDPGAgent:
         self.gamma = gamma
         self.tau = tau
 
-        # Actor networks
+        # actor networks (homogeneous)
         self.actor = Actor(state_dim, action_dim, max_action)
         self.actor_target = Actor(state_dim, action_dim, max_action)
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
 
-        # Critic networks (centralized - takes all agents' states and actions)
-        self.critic = None  # Will be set externally
+        # critic networks (centralized)
+        self.critic = None
         self.critic_target = None
         self.critic_optimizer = None
 
@@ -136,12 +136,12 @@ color_var = white
 clock = pygame.time.Clock()
 pygame.display.set_caption("Particle Sim")
 
-# Sim / env
+# sim / env
 my_world = World(screen)
 default_num_agents = 5
 default_num_enemies = 7
 
-# Hyperparameters
+# hyperparameters
 state_dim = 12
 action_dim = 2
 max_action = 20
@@ -152,18 +152,18 @@ noise_min = 0.001
 gamma = 0.95
 lr = 1e-3
 
-# Time stuff
+# time stuff
 update_after = 1000
 max_ticks = 400
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
 episodes = 1000
 
-# Outside stuff
+# outside stuff
 load_weights_ans = 0
 show_sim_ans = 0
 save_weights_ans = 0
-num_agents = input("How Many Agents? (int): ")
-num_enemies = input("How Many Enemies? (int): ")
+num_agents_ans = input("How Many Agents? (int): ")
+num_agents_ans = input("How Many Enemies? (int): ")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
@@ -178,15 +178,15 @@ if show_sim_ans == "y":
     show_sim = True
 else:
     show_sim = False
-if num_agents == "":
-    num_agents = 5
-if num_enemies == "":
-    num_enemies = 7
+if num_agents_ans == "":
+    num_agents = default_num_agents
+if num_agents_ans == "":
+    num_enemies = default_num_enemies
 
-# Replay buffer
+# replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
 
-# Training loop
+# training loop
 episode_rewards = []
 actor_losses = []
 critic_losses = []
@@ -211,10 +211,11 @@ for episode in range(episodes):
     episode_actor_loss = []
     episode_critic_loss = []
 
-
+    # game loop
     for tick in range(max_ticks):
-        keys = pygame.key.get_pressed()
 
+        # pygame / user interaction stuff
+        keys = pygame.key.get_pressed()
         for event in pygame.event.get():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -241,12 +242,10 @@ for episode in range(episodes):
                 screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
             if event.type == QUIT:
                 exit_flag = True
-
         if exit_flag:
             while save_weights_ans != "y" and save_weights_ans != "n":
                 save_weights_ans = input("Save Weights? (y/n): ")
             break
-
         if my_world.controllable_uuv != None:
             if keys[pygame.K_w]:
                 my_world.controllable_uuv.increase_throttle()
@@ -257,7 +256,7 @@ for episode in range(episodes):
             if keys[pygame.K_d]:
                 my_world.controllable_uuv.turn_right()
 
-        # Agent made a decision, now learn
+        # set previous states
         if tick % my_world.use_policy_after == 0:
             prev_states = []
             prev_actions = []
@@ -268,12 +267,12 @@ for episode in range(episodes):
                     prev_actions.append(uuv.current_action)
                     prev_agent_ids.append(uuv.id)
 
-        # Step environment
+        # step / tick environment
         screen.fill(black)
         my_world.tick()
 
         if tick % my_world.use_policy_after == 0:
-            # Collect transitions
+            # collect transitions
             next_states = []
             rewards = []
             dones = []
@@ -282,7 +281,6 @@ for episode in range(episodes):
 
             for i, agent_id in enumerate(prev_agent_ids):
                 if agent_id in current_ids:
-                    # Agent survived - find them and get next state
                     uuv = next(u for u in surviving_agents if u.id == agent_id)
                     next_state = uuv.get_state()
                     reward = my_world.get_and_clear_reward(agent_id)
@@ -292,16 +290,15 @@ for episode in range(episodes):
                                         reward, next_state, False)
                         episode_reward += reward
                 else:
-                    # Agent was removed - terminal transition
                     reward = my_world.get_and_clear_reward(agent_id)
 
                     if prev_actions[i] is not None:
-                        # Use prev_state as next_state for terminal
+                        # use prev_state as next_state for terminal, agent is done
                         replay_buffer.add(prev_states[i], prev_actions[i],
-                                        reward, prev_states[i], True)  # done=True
+                                        reward, prev_states[i], True)
                         episode_reward += reward
 
-            # Training step
+            # training step
             if len(replay_buffer) > update_after:
                 states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
 
@@ -325,7 +322,7 @@ for episode in range(episodes):
                 episode_critic_loss.append(critic_loss.item())
 
 
-                # Update Actor
+                # update actor
                 actor_actions = maddpg_agent.actor(states_t)
                 actor_loss = -maddpg_agent.critic(states_t, actor_actions).mean()
 
@@ -334,7 +331,7 @@ for episode in range(episodes):
                 maddpg_agent.actor_optimizer.step()
                 episode_actor_loss.append(actor_loss.item())
 
-                # Soft update target networks
+                # soft update target networks
                 maddpg_agent.soft_update(maddpg_agent.actor_target, maddpg_agent.actor)
                 maddpg_agent.soft_update(maddpg_agent.critic_target, maddpg_agent.critic)
 
@@ -361,14 +358,10 @@ for episode in range(episodes):
         print(f"Episode {episode:04d} | Avg Reward: {avg_reward:.2f} | Noise: {noise:.3f} | Buffer: {len(replay_buffer)}")
         if actor_losses:
             print(f"  Actor Loss: {actor_losses[-1]:.4f} | Critic Loss: {critic_losses[-1]:.4f}")
-    #####
-    #####
-    #####
 
 pygame.quit()
 
 def save_weights():
-    # Saving Weights
     print("Training Done")
     save_path = "models/maddpg_weights.pt"
     torch.save({
@@ -394,7 +387,6 @@ def save_weights():
     }, save_path)
     print(f"\nModel weights saved to {save_path}")
 
-    # Also save training metrics separately
     import json
     metrics_path = "models/training_metrics.json"
     with open(metrics_path, 'w') as f:

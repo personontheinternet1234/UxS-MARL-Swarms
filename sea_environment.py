@@ -31,7 +31,7 @@ class World():
     def get_and_clear_reward(self, agent_id):
         """Get accumulated reward and reset"""
         reward = self.agent_rewards.get(agent_id, 0)
-        self.agent_rewards[agent_id] = 0  # Reset to default
+        self.agent_rewards[agent_id] = 0  # reset to default
         return reward
 
     def set_reward(self, agent_id, reward):
@@ -275,7 +275,6 @@ class SwarmUUV(UUV):
                 if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
                     if np.linalg.norm(self.vel_vec) < 1:  # if not yet at max speed
                         self.increase_throttle(0.1)
-                        # self.increase_throttle(0.05)
                 else:
                     if angle_diff > 0:
                         self.turn_right()

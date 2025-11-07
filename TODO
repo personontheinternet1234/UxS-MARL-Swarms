@@ -2,4 +2,5 @@
 - communications and meshing (observations are only shared to those in mesh)
 - obstacles
 - grpo?
+- put agent classes into environment file / cleanup
 - non-training, just execution option
