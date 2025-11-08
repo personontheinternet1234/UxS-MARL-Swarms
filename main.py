@@ -48,6 +48,8 @@ class MADDPGAgent:
     def select_action(self, state):
         state = torch.FloatTensor(state).unsqueeze(0)
         action = self.actor(state).detach().cpu().numpy()[0]
+        # if random.random() > noise:
+        #     action = np.random.normal(0, self.max_action, size=action_dim)
         if noise > 0:
             action += np.random.normal(0, noise, size=self.action_dim)
             action = np.clip(action, -self.max_action, self.max_action)
@@ -69,6 +71,7 @@ class Actor(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = torch.tanh(self.out(x))
+        # x = self.out(x)
         return x * self.max_action
 
 class Critic(nn.Module):
@@ -134,7 +137,7 @@ red = (160, 50, 50)
 yellow = (100, 100, 10)
 color_var = white
 clock = pygame.time.Clock()
-pygame.display.set_caption("Particle Sim")
+pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
 my_world = World(screen)
@@ -167,7 +170,7 @@ num_enemies_ans = input("How Many Enemies? (int): ")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
-while show_sim_ans != "y" and load_weights_ans != "n":
+while show_sim_ans != "y" and show_sim_ans != "n":
     show_sim_ans = input("Show Sim? (y/n): ")
 
 if load_weights_ans == "y":
@@ -247,8 +250,8 @@ for episode in range(episodes):
             if event.type == QUIT:
                 exit_flag = True
         if exit_flag:
-            while save_weights_ans != "y" and save_weights_ans != "n":
-                save_weights_ans = input("Save Weights? (y/n): ")
+            # while save_weights_ans != "y" and save_weights_ans != "n":
+            #     save_weights_ans = input("Save Weights? (y/n): ")
             break
         if my_world.controllable_uuv != None:
             if keys[pygame.K_w]:
@@ -339,10 +342,7 @@ for episode in range(episodes):
                 maddpg_agent.soft_update(maddpg_agent.actor_target, maddpg_agent.actor)
                 maddpg_agent.soft_update(maddpg_agent.critic_target, maddpg_agent.critic)
 
-        if episode == episodes:
-            print("Almost over - demoing now")
-
-        if show_sim or episode == episodes:
+        if show_sim:
             pygame.display.flip()
             clock.tick(50)
 
@@ -401,7 +401,4 @@ def save_weights():
         }, f, indent=2)
     print(f"Training metrics saved to {metrics_path}")
 
-if save_weights_ans == "y":
-    save_weights()
-else:
-    print("Did not save weights.")
+save_weights()
