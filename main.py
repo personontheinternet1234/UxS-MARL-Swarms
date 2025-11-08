@@ -59,20 +59,40 @@ class MADDPGAgent:
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
+# class Actor(nn.Module):
+#     def __init__(self, state_dim, action_dim, max_action):
+#         super().__init__()
+#         self.fc1 = nn.Linear(state_dim, 128)
+#         self.fc2 = nn.Linear(128, 128)
+#         self.out = nn.Linear(128, action_dim)
+#         self.max_action = max_action
+
+#     def forward(self, x):
+#         x = F.relu(self.fc1(x))
+#         x = F.relu(self.fc2(x))
+#         x = torch.tanh(self.out(x))
+#         return x * self.max_action
+
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action):
+    def __init__(self, state_dim, action_dim, max_speed):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, 128)
         self.fc2 = nn.Linear(128, 128)
-        self.out = nn.Linear(128, action_dim)
-        self.max_action = max_action
+        self.dir = nn.Linear(128, 2)  # direction vector
+        self.speed = nn.Linear(128, 1)  # magnitude scalar
+        self.max_speed = max_speed
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = torch.tanh(self.out(x))
-        # x = self.out(x)
-        return x * self.max_action
+
+        # direction in unit circle
+        direction = F.normalize(self.dir(x), dim=-1)
+        # magnitude in [0, max_speed]
+        speed = torch.sigmoid(self.speed(x)) * self.max_speed
+
+        delta = direction * speed
+        return delta
 
 class Critic(nn.Module):
     def __init__(self, total_state_dim, total_action_dim):
@@ -145,7 +165,7 @@ default_num_agents = 5
 default_num_enemies = 7
 
 # hyperparameters
-state_dim = 12
+state_dim = 13
 action_dim = 2
 max_action = 20
 batch_size = 200
@@ -156,7 +176,7 @@ gamma = 0.95
 lr = 1e-3
 
 # time stuff
-update_after = 1000
+update_after = 10000
 max_ticks = 400
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
 episodes = 1000
@@ -203,16 +223,16 @@ for episode in range(episodes):
     my_world.reset()
 
     for i in range(num_agents):
-        x = random.randint(50, 450)
-        y = random.randint(50, 450)
+        x = random.randint(50, screen.get_width() - 50)
+        y = random.randint(50, screen.get_height() - 50)
         dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
         unit_vec_dir = dir / np.linalg.norm(dir)
-        my_world.add_swarm_uuv(x, y, unit_vec_dir, 5, blue, maddpg_agent)
+        my_world.add_swarm_uuv(x, y, unit_vec_dir, blue, maddpg_agent)
 
     for i in range(num_enemies):
-        enemy_x = random.randint(100, 400)
-        enemy_y = random.randint(100, 400)
-        my_world.add_controllable_uuv(enemy_x, enemy_y, np.array([1,0]), 5, yellow, 0)
+        enemy_x = random.randint(100, screen.get_width() - 100)
+        enemy_y = random.randint(100, screen.get_height() - 100)
+        my_world.add_enemy_uuv(enemy_x, enemy_y, yellow)
 
     episode_reward = 0
     episode_actor_loss = []
@@ -229,12 +249,12 @@ for episode in range(episodes):
                 color = blue
                 dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
                 unit_vec_dir = dir / np.linalg.norm(dir)
-                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, 5, color, maddpg_agent)
+                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, color, maddpg_agent)
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_g:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
-                    color = yellow
-                    my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), 5, color, id)
+                    color = (200, 200, 200)
+                    my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), color)
                 if event.key == pygame.K_p:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
                     color = white

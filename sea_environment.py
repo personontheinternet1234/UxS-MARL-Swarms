@@ -41,14 +41,18 @@ class World():
     def add_particle(self, x, y, radius, color):
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
 
-    def add_swarm_uuv(self, x, y, direction, radius, color, policy_net):
-        self.uuvs.append(SwarmUUV(x, y, direction, radius, color, policy_net, self, self.screen, self.id_tracker))
+    def add_swarm_uuv(self, x, y, direction, color, policy_net):
+        self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
-    def add_controllable_uuv(self, x, y, direction, radius, color, id):
-        _controllable_uuv = ControllableUUV(x, y, direction, radius, color, self, self.screen, self.id_tracker)
+    def add_controllable_uuv(self, x, y, direction, color):
+        _controllable_uuv = ControllableUUV(x, y, direction, 5, color, self, self.screen, self.id_tracker)
         self.uuvs.append(_controllable_uuv)
         self.controllable_uuv = _controllable_uuv
+        self.id_tracker += 1
+
+    def add_enemy_uuv(self, x, y, color):
+        self.uuvs.append(EnemyUUV(x, y, [0,1], 5, color, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
@@ -102,8 +106,13 @@ class UUV(Particle):
 
         self.acl_vec = np.array([0, 0])
 
+        self.waypoints = []
+
+        self.tick_counter = 0
+
     def tick(self):
         super().tick()
+        self.tick_counter += 1
         pygame.draw.line(self.screen, self.color, (self.x, self.y), (self.x + 10 * self.direction[0], self.y + 10 * self.direction[1]), 1)
 
         # calculate physics
@@ -163,100 +172,6 @@ class UUV(Particle):
                     # explode
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
 
-    def get_current_angle(self):
-        return math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
-
-class SwarmUUV(UUV):
-
-    def __init__(self, startx, starty, direction, radius, color, maddpg_agent, world: World, screen, id):
-        super().__init__(startx, starty, direction, radius, color, world, screen, id)
-
-        self.waypoints = []
-
-        self.observations = []
-
-        self.maddpg_agent = maddpg_agent
-
-        self.current_action = None
-
-        self.tick_counter = 0
-
-        self.observation_cone = 90
-
-    def tick(self):
-        self.tick_counter += 1
-        self.world.set_reward(self.id, -0.05)
-
-        # observing
-        self.collect_observations()
-
-        # decision making
-        if self.tick_counter % self.world.use_policy_after == 0:
-            self.take_action()
-        self.go_to_waypoint()
-
-        # physics, collision
-        super().tick()
-
-    def get_state(self):
-        """Returns the current state vector"""
-        smallest_dist = float("inf")
-        closest_friendly = [0, 0, 0]
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
-                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
-                if tested_dist < smallest_dist:
-                    smallest_dist = tested_dist
-                    closest_friendly = [swarmuuv.x, swarmuuv.y, 1]
-
-        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
-
-        # np helps for speed here
-        my_mesh_observations = []
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV) and len(swarmuuv.observations) > 0:
-                my_mesh_observations.append(swarmuuv.observations)
-        if len(my_mesh_observations) > 0:
-            my_mesh_observations = np.concatenate(my_mesh_observations)
-
-        smallest_dist = float("inf")
-        closest_enemy = [0, 0, 0]
-        for observation in my_mesh_observations:
-            tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
-            if tested_dist < smallest_dist:
-                smallest_dist = tested_dist
-                closest_enemy = [observation[0], observation[1], 1]
-
-        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2]]
-
-        return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
-
-    def take_action(self):
-        state = self.get_state()
-        action = self.maddpg_agent.select_action(state)
-
-        delta_x, delta_y = action
-
-        # delta_theta, distance = action
-        # current_angle = self.get_current_angle()
-        # desired_angle = current_angle + delta_theta
-        # delta_x = distance * math.cos(desired_angle)
-        # delta_y = distance * math.sin(desired_angle)
-
-        self.waypoints = []
-        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
-        self.current_action = action
-
-    def collect_observations(self):
-        self.observations = []
-        for enemy in self.world.uuvs:
-            if isinstance(enemy, ControllableUUV):
-                current_angle = self.get_current_angle()
-                angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
-                angle_diff = abs(angle_to_enemy - current_angle)
-                if angle_diff < self.observation_cone:
-                    self.observations.append([enemy.x, enemy.y])
-
     def add_waypoint(self, waypoint):
         if waypoint[0] < 10:
             waypoint[0] = 10
@@ -293,12 +208,101 @@ class SwarmUUV(UUV):
                     else:
                         self.turn_left()
 
+    def get_current_angle(self):
+        return math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
+
+class SwarmUUV(UUV):
+
+    def __init__(self, startx, starty, direction, radius, color, maddpg_agent, world: World, screen, id):
+        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+
+        self.observations = []
+
+        self.maddpg_agent = maddpg_agent
+
+        self.current_action = None
+
+        self.observation_cone = 120
+
+    def tick(self):
+        self.world.set_reward(self.id, -0.05)
+
+        # observing
+        self.collect_observations()
+
+        # decision making
+        if self.tick_counter % self.world.use_policy_after == 0:
+            self.take_action()
+        self.go_to_waypoint()
+
+        # physics, collision
+        super().tick()
+
+    def get_state(self):
+        """Returns the current state vector"""
+        smallest_dist = float("inf")
+        closest_friendly = [0, 0, 0]
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
+                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
+                if tested_dist < smallest_dist:
+                    smallest_dist = tested_dist
+                    closest_friendly = [swarmuuv.x, swarmuuv.y, 1]
+
+        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
+
+        # np helps for speed here
+        my_mesh_observations = []
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV) and len(swarmuuv.observations) > 0:
+                my_mesh_observations.append(swarmuuv.observations)
+        if len(my_mesh_observations) > 0:
+            my_mesh_observations = np.concatenate(my_mesh_observations)
+
+        smallest_dist = float("inf")
+        closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
+        for observation in my_mesh_observations:
+            tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
+            if tested_dist < smallest_dist:
+                smallest_dist = tested_dist
+                closest_enemy = [observation[0], observation[1], observation[2], 1]  # x, y, vel_vel, true
+
+        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3]]
+
+        return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
+
+    def take_action(self):
+        state = self.get_state()
+        action = self.maddpg_agent.select_action(state)
+
+        delta_x, delta_y = action
+
+        # delta_theta, distance = action
+        # current_angle = self.get_current_angle()
+        # desired_angle = current_angle + delta_theta
+        # delta_x = distance * math.cos(desired_angle)
+        # delta_y = distance * math.sin(desired_angle)
+
+        self.waypoints = []
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
+        self.current_action = action
+
+    def collect_observations(self):
+        self.observations = []
+        for enemy in self.world.uuvs:
+            if isinstance(enemy, EnemyUUV):
+                current_angle = self.get_current_angle()
+                angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
+                angle_diff = abs(angle_to_enemy - current_angle)
+                if angle_diff < self.observation_cone:
+                    self.observations.append(np.hstack([enemy.x, enemy.y, enemy.vel_vec]))
+
     def check_collision(self):
         for u in self.world.uuvs:
             if u.id != self.id:
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
-                    if isinstance(u, ControllableUUV):
+                    if isinstance(u, EnemyUUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
                         self.world.set_reward(self.id, -0.5)
@@ -307,7 +311,7 @@ class SwarmUUV(UUV):
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
                 try_to_remove(self.world.uuvs, self)
 
-class ControllableUUV(UUV):
+class EnemyUUV(UUV):
 
     def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
@@ -322,6 +326,29 @@ class ControllableUUV(UUV):
                 if angle_diff < swarmuuv.observation_cone:
                     self.color = (255, 255, 50)
 
+        if self.tick_counter % 250 == 0:
+            x, y = random.randint(10, self.world.screen_width - 10), random.randint(10, self.world.screen_height - 10)
+            self.waypoints = []
+            self.waypoints.append((x,y))
+
+        self.go_to_waypoint()
+
+        super().tick()
+
+class ControllableUUV(UUV):
+
+    def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
+        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+
+    def tick(self):
+        self.color = (200, 200, 200)
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV):
+                swarmuuv_current_angle = self.get_current_angle()
+                swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
+                angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
+                if angle_diff < swarmuuv.observation_cone:
+                    self.color = (255, 255, 255)
         super().tick()
 
 class Explosion(Particle):
