@@ -126,12 +126,12 @@ class UUV(Particle):
         self.acl_vec = np.multiply(-1 * value, self.direction)
 
     def turn_left(self):
-        current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
+        current_angle = self.get_current_angle()
         new_angle = current_angle - 3
         self.set_angle_instantly(new_angle)
 
     def turn_right(self):
-        current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
+        current_angle = self.get_current_angle()
         new_angle = current_angle + 3
         self.set_angle_instantly(new_angle)
 
@@ -162,6 +162,9 @@ class UUV(Particle):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):  # will need to change later when enemies aren't 1D
                     # explode
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+
+    def get_current_angle(self):
+        return math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
 
 class SwarmUUV(UUV):
 
@@ -231,7 +234,15 @@ class SwarmUUV(UUV):
     def take_action(self):
         state = self.get_state()
         action = self.maddpg_agent.select_action(state)
+
         delta_x, delta_y = action
+
+        # delta_theta, distance = action
+        # current_angle = self.get_current_angle()
+        # desired_angle = current_angle + delta_theta
+        # delta_x = distance * math.cos(desired_angle)
+        # delta_y = distance * math.sin(desired_angle)
+
         self.waypoints = []
         self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
         self.current_action = action
@@ -240,7 +251,7 @@ class SwarmUUV(UUV):
         self.observations = []
         for enemy in self.world.uuvs:
             if isinstance(enemy, ControllableUUV):
-                current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
+                current_angle = self.get_current_angle()
                 angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)
                 if angle_diff < self.observation_cone:
@@ -265,9 +276,10 @@ class SwarmUUV(UUV):
                 self.vel_vec = np.array([0,0])
             else:
                 # not yet arrived at waypoint
-                pygame.draw.line(self.screen, (255, 0, 0), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
+                pygame.draw.circle(self.screen, (150, 150, 150), (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
+                pygame.draw.line(self.screen, (150, 150, 150), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
 
-                current_angle = math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
+                current_angle = self.get_current_angle()
                 desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
                 angle_diff = (desired_angle - current_angle + 180) % 360 - 180
                 distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
@@ -304,7 +316,7 @@ class ControllableUUV(UUV):
         self.color = (100, 100, 10)
         for swarmuuv in self.world.uuvs:
             if isinstance(swarmuuv, SwarmUUV):
-                swarmuuv_current_angle = math.atan2(swarmuuv.direction[1], swarmuuv.direction[0]) * 180 / math.pi
+                swarmuuv_current_angle = self.get_current_angle()
                 swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
                 angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
                 if angle_diff < swarmuuv.observation_cone:
