@@ -22,6 +22,8 @@ class World():
         self.screen_width = self.screen.get_size()[0]
         self.screen_height = self.screen.get_size()[1]
 
+        self.spawn_spacing = 10
+
         self.id_tracker = 0
 
         self.agent_rewards = {}  # {agent_id: reward}
@@ -40,6 +42,25 @@ class World():
 
     def add_particle(self, x, y, radius, color):
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
+
+    def add_swarm_uuv_random(self, color, policy_net):
+        x = random.randint(50, self.screen_width - 50)
+        y = random.randint(50, self.screen_height - 50)
+        dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
+        unit_vec_dir = dir / np.linalg.norm(dir)
+
+        self.add_swarm_uuv(x, y, unit_vec_dir, color, policy_net)
+
+    def add_enemy_uuv_random(self, color):
+        enemy_x = random.randint(100, self.screen_width - 100)
+        enemy_y = random.randint(100, self.screen_height - 100)
+
+        for uuv in self.uuvs:
+            if distance((enemy_x, enemy_y), (uuv.x, uuv.y)) < self.spawn_spacing:
+                enemy_x = random.randint(100, self.screen_width - 100)
+                enemy_y = random.randint(100, self.screen_height - 100)
+
+        self.add_enemy_uuv(enemy_x, enemy_y, color)
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
         self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
@@ -222,6 +243,8 @@ class SwarmUUV(UUV):
 
         self.current_action = None
 
+        self.nearest_target = [0,0,0,0]
+
         self.observation_cone = 120
 
     def tick(self):
@@ -258,6 +281,9 @@ class SwarmUUV(UUV):
                 my_mesh_observations.append(swarmuuv.observations)
         if len(my_mesh_observations) > 0:
             my_mesh_observations = np.concatenate(my_mesh_observations)
+            # print(self.observations)
+            # print(my_mesh_observations)
+            # print()
 
         smallest_dist = float("inf")
         closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
@@ -266,8 +292,13 @@ class SwarmUUV(UUV):
             if tested_dist < smallest_dist:
                 smallest_dist = tested_dist
                 closest_enemy = [observation[0], observation[1], observation[2], 1]  # x, y, vel_vel, true
+                self.nearest_target = closest_enemy
 
-        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3]]
+        # limited memory of unseen enemies
+        if closest_enemy[-1] == 0 or distance((self.x, self.y), (self.nearest_target[0], self.nearest_target[1])) < distance((self.x, self.y), (closest_enemy[0], closest_enemy[1])):  # calculated closest enemy doesn't exist OR is further than the most recent closest enemy
+            delta_enemy = [self.nearest_target[0] - self.x, self.nearest_target[1] - self.y, self.nearest_target[2], self.nearest_target[3]]
+        else:
+            delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3]]
 
         return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
 
@@ -290,7 +321,7 @@ class SwarmUUV(UUV):
     def collect_observations(self):
         self.observations = []
         for enemy in self.world.uuvs:
-            if isinstance(enemy, EnemyUUV):
+            if isinstance(enemy, EnemyUUV) or isinstance(enemy, ControllableUUV):
                 current_angle = self.get_current_angle()
                 angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)

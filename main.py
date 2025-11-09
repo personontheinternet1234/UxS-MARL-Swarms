@@ -74,22 +74,20 @@ class MADDPGAgent:
 #         return x * self.max_action
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_speed):
+    def __init__(self, state_dim, action_dim, max_action):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, 128)
         self.fc2 = nn.Linear(128, 128)
-        self.dir = nn.Linear(128, 2)  # direction vector
-        self.speed = nn.Linear(128, 1)  # magnitude scalar
-        self.max_speed = max_speed
+        self.dir = nn.Linear(128, 2)
+        self.distance = nn.Linear(128, 1)
+        self.max_action = max_action
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
 
-        # direction in unit circle
         direction = F.normalize(self.dir(x), dim=-1)
-        # magnitude in [0, max_speed]
-        speed = torch.sigmoid(self.speed(x)) * self.max_speed
+        speed = torch.sigmoid(self.distance(x)) * self.max_action
 
         delta = direction * speed
         return delta
@@ -176,10 +174,10 @@ gamma = 0.95
 lr = 1e-3
 
 # time stuff
-update_after = 10000
+update_after = 1000
 max_ticks = 400
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
-episodes = 1000
+default_episodes = 1000
 
 # outside stuff
 load_weights_ans = 0
@@ -187,6 +185,7 @@ show_sim_ans = 0
 save_weights_ans = 0
 num_agents_ans = input("How Many Agents? (int): ")
 num_enemies_ans = input("How Many Enemies? (int): ")
+num_episodes_ans = input("How Many Episodes? (int): ")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
@@ -209,6 +208,10 @@ if num_enemies_ans == "":
     num_enemies = default_num_enemies
 else:
     num_enemies = int(num_enemies_ans)
+if num_episodes_ans == "":
+    episodes = default_episodes
+else:
+    episodes = int(num_episodes_ans)
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
@@ -223,16 +226,18 @@ for episode in range(episodes):
     my_world.reset()
 
     for i in range(num_agents):
-        x = random.randint(50, screen.get_width() - 50)
-        y = random.randint(50, screen.get_height() - 50)
-        dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
-        unit_vec_dir = dir / np.linalg.norm(dir)
-        my_world.add_swarm_uuv(x, y, unit_vec_dir, blue, maddpg_agent)
+        my_world.add_swarm_uuv_random(blue, maddpg_agent)
+        # x = random.randint(50, screen.get_width() - 50)
+        # y = random.randint(50, screen.get_height() - 50)
+        # dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
+        # unit_vec_dir = dir / np.linalg.norm(dir)
+        # my_world.add_swarm_uuv(x, y, unit_vec_dir, blue, maddpg_agent)
 
     for i in range(num_enemies):
-        enemy_x = random.randint(100, screen.get_width() - 100)
-        enemy_y = random.randint(100, screen.get_height() - 100)
-        my_world.add_enemy_uuv(enemy_x, enemy_y, yellow)
+        my_world.add_enemy_uuv_random(yellow)
+        # enemy_x = random.randint(100, screen.get_width() - 100)
+        # enemy_y = random.randint(100, screen.get_height() - 100)
+        # my_world.add_enemy_uuv(enemy_x, enemy_y, yellow)
 
     episode_reward = 0
     episode_actor_loss = []
