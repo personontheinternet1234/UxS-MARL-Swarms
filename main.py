@@ -35,8 +35,8 @@ class MADDPGAgent:
         self.tau = tau
 
         # actor networks (homogeneous)
-        self.actor = Actor(state_dim, action_dim, max_action)
-        self.actor_target = Actor(state_dim, action_dim, max_action)
+        self.actor = Actor(state_dim, max_action)
+        self.actor_target = Actor(state_dim, max_action)
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
 
@@ -48,36 +48,23 @@ class MADDPGAgent:
     def select_action(self, state):
         state = torch.FloatTensor(state).unsqueeze(0)
         action = self.actor(state).detach().cpu().numpy()[0]
-        # if random.random() > noise:
-        #     action = np.random.normal(0, self.max_action, size=action_dim)
-        if noise > 0:
-            action += np.random.normal(0, noise, size=self.action_dim)
-            action = np.clip(action, -self.max_action, self.max_action)
+        if random.random() < noise:
+            action = np.random.normal(0, self.max_action, size=action_dim)
+        # if noise > 0:
+        #     action += np.random.normal(0, noise * self.max_action, size=self.action_dim)
+        #     action = np.clip(action, -self.max_action, self.max_action)
         return action
 
     def soft_update(self, target, source):
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
-# class Actor(nn.Module):
-#     def __init__(self, state_dim, action_dim, max_action):
-#         super().__init__()
-#         self.fc1 = nn.Linear(state_dim, 128)
-#         self.fc2 = nn.Linear(128, 128)
-#         self.out = nn.Linear(128, action_dim)
-#         self.max_action = max_action
-
-#     def forward(self, x):
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = torch.tanh(self.out(x))
-#         return x * self.max_action
-
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action):
+    def __init__(self, state_dim, max_action):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, 128)
         self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
         self.dir = nn.Linear(128, 2)
         self.distance = nn.Linear(128, 1)
         self.max_action = max_action
@@ -85,11 +72,12 @@ class Actor(nn.Module):
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
 
         direction = F.normalize(self.dir(x), dim=-1)
-        speed = torch.sigmoid(self.distance(x)) * self.max_action
+        actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
 
-        delta = direction * speed
+        delta = direction * actual_distance
         return delta
 
 class Critic(nn.Module):
@@ -159,11 +147,11 @@ pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
 my_world = World(screen)
-default_num_agents = 5
+default_num_agents = 10
 default_num_enemies = 7
 
 # hyperparameters
-state_dim = 13
+state_dim = 16
 action_dim = 2
 max_action = 20
 batch_size = 200
@@ -194,6 +182,7 @@ while show_sim_ans != "y" and show_sim_ans != "n":
 
 if load_weights_ans == "y":
     maddpg_agent = load_weights(True)
+    noise = 0
 else:
     maddpg_agent = load_weights(False)
 if show_sim_ans == "y":
@@ -234,10 +223,12 @@ for episode in range(episodes):
         # my_world.add_swarm_uuv(x, y, unit_vec_dir, blue, maddpg_agent)
 
     for i in range(num_enemies):
-        my_world.add_enemy_uuv_random(yellow)
-        # enemy_x = random.randint(100, screen.get_width() - 100)
-        # enemy_y = random.randint(100, screen.get_height() - 100)
-        # my_world.add_enemy_uuv(enemy_x, enemy_y, yellow)
+        if episode <= episodes / 2:
+            decision_making = "random"
+        else:
+            decision_making = "escape"
+        decision_making = "random"
+        my_world.add_enemy_uuv_random(yellow, decision_making)
 
     episode_reward = 0
     episode_actor_loss = []

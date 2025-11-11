@@ -51,7 +51,7 @@ class World():
 
         self.add_swarm_uuv(x, y, unit_vec_dir, color, policy_net)
 
-    def add_enemy_uuv_random(self, color):
+    def add_enemy_uuv_random(self, color, decision_making):
         enemy_x = random.randint(100, self.screen_width - 100)
         enemy_y = random.randint(100, self.screen_height - 100)
 
@@ -60,7 +60,7 @@ class World():
                 enemy_x = random.randint(100, self.screen_width - 100)
                 enemy_y = random.randint(100, self.screen_height - 100)
 
-        self.add_enemy_uuv(enemy_x, enemy_y, color)
+        self.add_enemy_uuv(enemy_x, enemy_y, decision_making, color)
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
         self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
@@ -72,8 +72,8 @@ class World():
         self.controllable_uuv = _controllable_uuv
         self.id_tracker += 1
 
-    def add_enemy_uuv(self, x, y, color):
-        self.uuvs.append(EnemyUUV(x, y, [0,1], 5, color, self, self.screen, self.id_tracker))
+    def add_enemy_uuv(self, x, y, color, decision_making):
+        self.uuvs.append(EnemyUUV(x, y, [0,1], 5, color, decision_making, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
@@ -243,7 +243,7 @@ class SwarmUUV(UUV):
 
         self.current_action = None
 
-        self.nearest_target = [0,0,0,0]
+        self.nearest_target = [0,0,0,0,0]
 
         self.observation_cone = 120
 
@@ -264,15 +264,15 @@ class SwarmUUV(UUV):
     def get_state(self):
         """Returns the current state vector"""
         smallest_dist = float("inf")
-        closest_friendly = [0, 0, 0]
+        closest_friendly = np.zeros(2 + len(self.vel_vec) + 1)
         for swarmuuv in self.world.uuvs:
             if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
                 tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
                 if tested_dist < smallest_dist:
                     smallest_dist = tested_dist
-                    closest_friendly = [swarmuuv.x, swarmuuv.y, 1]
+                    closest_friendly = np.hstack([swarmuuv.x, swarmuuv.y, swarmuuv.vel_vec, 1])
 
-        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2]]
+        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2], closest_friendly[3], closest_friendly[4]]
 
         # np helps for speed here
         my_mesh_observations = []
@@ -291,14 +291,14 @@ class SwarmUUV(UUV):
             tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
             if tested_dist < smallest_dist:
                 smallest_dist = tested_dist
-                closest_enemy = [observation[0], observation[1], observation[2], 1]  # x, y, vel_vel, true
+                closest_enemy = [observation[0], observation[1], observation[2], observation[3], 1]  # x, y, vel_vel, true
                 self.nearest_target = closest_enemy
 
         # limited memory of unseen enemies
         if closest_enemy[-1] == 0 or distance((self.x, self.y), (self.nearest_target[0], self.nearest_target[1])) < distance((self.x, self.y), (closest_enemy[0], closest_enemy[1])):  # calculated closest enemy doesn't exist OR is further than the most recent closest enemy
-            delta_enemy = [self.nearest_target[0] - self.x, self.nearest_target[1] - self.y, self.nearest_target[2], self.nearest_target[3]]
+            delta_enemy = [self.nearest_target[0] - self.x, self.nearest_target[1] - self.y, self.nearest_target[2], self.nearest_target[3], self.nearest_target[4]]
         else:
-            delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3]]
+            delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
 
         return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
 
@@ -307,12 +307,6 @@ class SwarmUUV(UUV):
         action = self.maddpg_agent.select_action(state)
 
         delta_x, delta_y = action
-
-        # delta_theta, distance = action
-        # current_angle = self.get_current_angle()
-        # desired_angle = current_angle + delta_theta
-        # delta_x = distance * math.cos(desired_angle)
-        # delta_y = distance * math.sin(desired_angle)
 
         self.waypoints = []
         self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
@@ -336,7 +330,8 @@ class SwarmUUV(UUV):
                     if isinstance(u, EnemyUUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
-                        self.world.set_reward(self.id, -0.5)
+                        # self.world.set_reward(self.id, -0.5)
+                        ...
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -344,23 +339,42 @@ class SwarmUUV(UUV):
 
 class EnemyUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, color, decision_making: str, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
+        self.decision_making = decision_making
 
     def tick(self):
         self.color = (100, 100, 10)
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV):
-                swarmuuv_current_angle = self.get_current_angle()
-                swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
+        smallest_dist = float("inf")
+        closest_uuv = None
+        for uuv in self.world.uuvs:
+
+            if isinstance(uuv, SwarmUUV):  # should I render myself as observed
+                swarmuuv_current_angle = uuv.get_current_angle()
+                swarmuuv_angle_to_enemy = math.atan2(self.y - uuv.y, self.x - uuv.x) * 180 / math.pi
                 angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
-                if angle_diff < swarmuuv.observation_cone:
+                if angle_diff < uuv.observation_cone:
                     self.color = (255, 255, 50)
 
-        if self.tick_counter % 250 == 0:
-            x, y = random.randint(10, self.world.screen_width - 10), random.randint(10, self.world.screen_height - 10)
+            if uuv.id != self.id:  # how I should run away (rudimentary)
+                tested_dist = distance((self.x, self.y), (uuv.x, uuv.y))
+                if tested_dist < smallest_dist:
+                    smallest_dist = tested_dist
+                    closest_uuv = uuv
+
+        if self.tick_counter % 20 == 0:
             self.waypoints = []
-            self.waypoints.append((x,y))
+            if self.decision_making == "static":
+                ...
+            elif self.decision_making == "random":
+                x, y = random.randint(10, self.world.screen_width - 10), random.randint(10, self.world.screen_height - 10)
+                self.waypoints.append((self.x + x, self.y + y))
+            elif self.decision_making == "escape":
+                if closest_uuv is not None:
+                    dir_to_closest = np.array([closest_uuv.x - self.x, closest_uuv.y - self.y])
+                    dir_to_closest = -25 * dir_to_closest / np.linalg.norm(dir_to_closest)
+                    x, y = (dir_to_closest[0], dir_to_closest[1])
+                    self.waypoints.append((self.x + x, self.y + y))
 
         self.go_to_waypoint()
 
@@ -375,7 +389,7 @@ class ControllableUUV(UUV):
         self.color = (200, 200, 200)
         for swarmuuv in self.world.uuvs:
             if isinstance(swarmuuv, SwarmUUV):
-                swarmuuv_current_angle = self.get_current_angle()
+                swarmuuv_current_angle = swarmuuv.get_current_angle()
                 swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
                 angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
                 if angle_diff < swarmuuv.observation_cone:
