@@ -182,7 +182,7 @@ while show_sim_ans != "y" and show_sim_ans != "n":
 
 if load_weights_ans == "y":
     maddpg_agent = load_weights(True)
-    noise = 0
+    noise = 0.01
 else:
     maddpg_agent = load_weights(False)
 if show_sim_ans == "y":
@@ -227,7 +227,6 @@ for episode in range(episodes):
             decision_making = "random"
         else:
             decision_making = "escape"
-        decision_making = "random"
         my_world.add_enemy_uuv_random(yellow, decision_making)
 
     episode_reward = 0

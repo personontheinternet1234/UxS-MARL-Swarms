@@ -60,7 +60,7 @@ class World():
                 enemy_x = random.randint(100, self.screen_width - 100)
                 enemy_y = random.randint(100, self.screen_height - 100)
 
-        self.add_enemy_uuv(enemy_x, enemy_y, decision_making, color)
+        self.add_enemy_uuv(enemy_x, enemy_y, color, decision_making)
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
         self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
@@ -339,7 +339,7 @@ class SwarmUUV(UUV):
 
 class EnemyUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, color, decision_making: str, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, color, decision_making, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
         self.decision_making = decision_making
 
@@ -362,14 +362,16 @@ class EnemyUUV(UUV):
                     smallest_dist = tested_dist
                     closest_uuv = uuv
 
-        if self.tick_counter % 20 == 0:
-            self.waypoints = []
-            if self.decision_making == "static":
-                ...
-            elif self.decision_making == "random":
+        if self.decision_making == "static":
+            ...
+        elif self.decision_making == "random":
+            if self.tick_counter % 250 == 0:
+                self.waypoints = []
                 x, y = random.randint(10, self.world.screen_width - 10), random.randint(10, self.world.screen_height - 10)
-                self.waypoints.append((self.x + x, self.y + y))
-            elif self.decision_making == "escape":
+                self.waypoints.append((x, y))
+        elif self.decision_making == "escape":
+            if self.tick_counter % 10 == 0:
+                self.waypoints = []
                 if closest_uuv is not None:
                     dir_to_closest = np.array([closest_uuv.x - self.x, closest_uuv.y - self.y])
                     dir_to_closest = -25 * dir_to_closest / np.linalg.norm(dir_to_closest)
