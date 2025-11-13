@@ -25,85 +25,11 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-class MADDPGAgent:
-    def __init__(self, state_dim, action_dim, max_action, lr_actor=1e-3, lr_critic=1e-3,
-                 gamma=0.95, tau=0.01):
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.max_action = max_action
-        self.gamma = gamma
-        self.tau = tau
-
-        # actor networks (homogeneous)
-        self.actor = Actor(state_dim, max_action)
-        self.actor_target = Actor(state_dim, max_action)
-        self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
-
-        # critic networks (centralized)
-        self.critic = None
-        self.critic_target = None
-        self.critic_optimizer = None
-
-    def select_action(self, state):
-        state = torch.FloatTensor(state).unsqueeze(0)
-        action = self.actor(state).detach().cpu().numpy()[0]
-        if random.random() < noise:
-            action = np.random.normal(0, self.max_action, size=action_dim)
-        # if noise > 0:
-        #     action += np.random.normal(0, noise * self.max_action, size=self.action_dim)
-        #     action = np.clip(action, -self.max_action, self.max_action)
-        return action
-
-    def soft_update(self, target, source):
-        for target_param, param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-class Actor(nn.Module):
-    def __init__(self, state_dim, max_action):
-        super().__init__()
-        self.fc1 = nn.Linear(state_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
-        self.dir = nn.Linear(128, 2)
-        self.distance = nn.Linear(128, 1)
-        self.max_action = max_action
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-
-        direction = F.normalize(self.dir(x), dim=-1)
-        actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
-
-        delta = direction * actual_distance
-        return delta
-
-class Critic(nn.Module):
-    def __init__(self, total_state_dim, total_action_dim):
-        super().__init__()
-        self.fc1 = nn.Linear(total_state_dim + total_action_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.out = nn.Linear(128, 1)
-
-    def forward(self, states, actions):
-        x = torch.cat([states, actions], dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.out(x)
-
 def load_weights(flag):
     if flag:
         checkpoint = torch.load("models/maddpg_weights.pt", weights_only=False)
         params = checkpoint['hyperparameters']
-        maddpg_agent = MADDPGAgent(
-            params['state_dim'],
-            params['action_dim'],
-            params['max_action'],
-            gamma=params['gamma'],
-            tau=params['tau']
-        )
+        maddpg_agent = MADDPGAgent( params['state_dim'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
         maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
         maddpg_agent.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
         maddpg_agent.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
@@ -118,59 +44,37 @@ def load_weights(flag):
             maddpg_agent.critic_optimizer = optim.Adam(maddpg_agent.critic.parameters(), lr=lr)
             maddpg_agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
     else:
-        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action,
-                                lr_actor=lr, lr_critic=lr,
-                                gamma=gamma, tau=0.01)
+        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action, epsilon, lr_actor=lr, lr_critic=lr, gamma=gamma, tau=0.01)
         total_state_dim = state_dim
         total_action_dim = action_dim
         maddpg_agent.critic = Critic(total_state_dim, total_action_dim)
         maddpg_agent.critic_target = Critic(total_state_dim, total_action_dim)
         maddpg_agent.critic_target.load_state_dict(maddpg_agent.critic.state_dict())
-        maddpg_agent.critic_optimizer = optim.Adam(maddpg_agent.critic.parameters(),
-                                                lr=lr)
+        maddpg_agent.critic_optimizer = optim.Adam(maddpg_agent.critic.parameters(), lr=lr)
 
     return maddpg_agent
-
-# Pygame stuff
-pygame.init()
-start_width = 500
-start_height = 500
-screen = pygame.display.set_mode((start_width, start_height), pygame.RESIZABLE)
-black = (0,0,0)
-white = (255, 255, 255)
-blue = (50,50,160)
-red = (160, 50, 50)
-yellow = (100, 100, 10)
-color_var = white
-clock = pygame.time.Clock()
-pygame.display.set_caption("UxS MARL SWARMS")
-
-# sim / env
-my_world = World(screen)
-default_num_agents = 10
-default_num_enemies = 7
 
 # hyperparameters
 state_dim = 16
 action_dim = 2
 max_action = 20
 batch_size = 200
-noise = 0.5
-noise_decay = 0.995
-noise_min = 0.001
+epsilon = 0.5
+epsilon_decay = 0.995
+epsilon_min = 0.001
 gamma = 0.95
 lr = 1e-3
 
-# time stuff
-update_after = 1000
-max_ticks = 400
-my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+# defaults
+default_num_agents = 15
+default_num_enemies = 10
 default_episodes = 1000
 
 # outside stuff
 load_weights_ans = 0
 show_sim_ans = 0
 save_weights_ans = 0
+print("")
 num_agents_ans = input("How Many Agents? (int): ")
 num_enemies_ans = input("How Many Enemies? (int): ")
 num_episodes_ans = input("How Many Episodes? (int): ")
@@ -182,7 +86,7 @@ while show_sim_ans != "y" and show_sim_ans != "n":
 
 if load_weights_ans == "y":
     maddpg_agent = load_weights(True)
-    noise = 0.01
+    epsilon = 0.01
 else:
     maddpg_agent = load_weights(False)
 if show_sim_ans == "y":
@@ -201,6 +105,37 @@ if num_episodes_ans == "":
     episodes = default_episodes
 else:
     episodes = int(num_episodes_ans)
+print(f"")
+if load_weights_ans == "y":
+    print(f"Loaded Weights")
+else:
+    print(f"Did Not Load Weights")
+print(f"Using {num_agents} agents")
+print(f"Using {num_enemies} enemies")
+print(f"Using {episodes} episodes")
+print(f"")
+
+# Pygame stuff
+pygame.init()
+start_width = 500
+start_height = 500
+screen = pygame.display.set_mode((start_width, start_height), pygame.RESIZABLE)
+black = (0,0,0)
+white = (255, 255, 255)
+blue = (50,50,160)
+red = (160, 50, 50)
+yellow = (100, 100, 10)
+color_var = white
+clock = pygame.time.Clock()
+pygame.display.set_caption("UxS MARL SWARMS")
+
+# sim / env
+my_world = World(screen)
+
+# time stuff
+update_after = 1000
+max_ticks = 400
+my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
@@ -216,14 +151,9 @@ for episode in range(episodes):
 
     for i in range(num_agents):
         my_world.add_swarm_uuv_random(blue, maddpg_agent)
-        # x = random.randint(50, screen.get_width() - 50)
-        # y = random.randint(50, screen.get_height() - 50)
-        # dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
-        # unit_vec_dir = dir / np.linalg.norm(dir)
-        # my_world.add_swarm_uuv(x, y, unit_vec_dir, blue, maddpg_agent)
 
     for i in range(num_enemies):
-        if episode <= episodes / 2:
+        if episode <= 4/5 * episodes:
             decision_making = "random"
         else:
             decision_making = "escape"
@@ -364,7 +294,7 @@ for episode in range(episodes):
     if exit_flag:
         break
 
-    noise = max(noise_min, noise * noise_decay)
+    epsilon = max(epsilon_min, epsilon * epsilon_decay)
 
     episode_rewards.append(episode_reward)
     if episode_actor_loss:
@@ -374,7 +304,7 @@ for episode in range(episodes):
 
     if episode % 5 == 0:
         avg_reward = np.mean(episode_rewards[-10:])
-        print(f"Episode {episode:04d} | Avg Reward: {avg_reward:.2f} | Noise: {noise:.3f} | Buffer: {len(replay_buffer)}")
+        print(f"Episode {episode:04d} | Avg Reward: {avg_reward:.2f} | Epsilon: {epsilon:.3f} | Buffer: {len(replay_buffer)}")
         if actor_losses:
             print(f"  Actor Loss: {actor_losses[-1]:.4f} | Critic Loss: {critic_losses[-1]:.4f}")
 

@@ -7,6 +7,71 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+class MADDPGAgent:
+    def __init__(self, state_dim, action_dim, max_action, epsilon, lr_actor=1e-3, lr_critic=1e-3,
+                 gamma=0.95, tau=0.01):
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.max_action = max_action
+        self.epsilon = epsilon
+        self.gamma = gamma
+        self.tau = tau
+
+        # actor networks (homogeneous)
+        self.actor = Actor(state_dim, max_action)
+        self.actor_target = Actor(state_dim, max_action)
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
+
+        # critic networks (centralized)
+        self.critic = None
+        self.critic_target = None
+        self.critic_optimizer = None
+
+    def select_action(self, state):
+        state = torch.FloatTensor(state).unsqueeze(0)
+        action = self.actor(state).detach().cpu().numpy()[0]
+        if random.random() < self.epsilon:
+            action = np.random.normal(0, self.max_action, size=self.action_dim)
+        return action
+
+    def soft_update(self, target, source):
+        for target_param, param in zip(target.parameters(), source.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+class Actor(nn.Module):
+    def __init__(self, state_dim, max_action):
+        super().__init__()
+        self.fc1 = nn.Linear(state_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.dir = nn.Linear(128, 2)
+        self.distance = nn.Linear(128, 1)
+        self.max_action = max_action
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+
+        direction = F.normalize(self.dir(x), dim=-1)
+        actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
+
+        delta = direction * actual_distance
+        return delta
+
+class Critic(nn.Module):
+    def __init__(self, total_state_dim, total_action_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(total_state_dim + total_action_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.out = nn.Linear(128, 1)
+
+    def forward(self, states, actions):
+        x = torch.cat([states, actions], dim=1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.out(x)
 
 class World():
 
@@ -245,7 +310,7 @@ class SwarmUUV(UUV):
 
         self.nearest_target = [0,0,0,0,0]
 
-        self.observation_cone = 120
+        self.observation_cone = 360
 
     def tick(self):
         self.world.set_reward(self.id, -0.05)
@@ -299,6 +364,7 @@ class SwarmUUV(UUV):
             delta_enemy = [self.nearest_target[0] - self.x, self.nearest_target[1] - self.y, self.nearest_target[2], self.nearest_target[3], self.nearest_target[4]]
         else:
             delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
+        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
 
         return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
 
@@ -330,8 +396,7 @@ class SwarmUUV(UUV):
                     if isinstance(u, EnemyUUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
-                        # self.world.set_reward(self.id, -0.5)
-                        ...
+                        self.world.set_reward(self.id, -0.5)
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
