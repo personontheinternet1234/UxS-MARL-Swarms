@@ -8,7 +8,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 class MADDPGAgent:
-    def __init__(self, state_dim, action_dim, max_action, epsilon, lr_actor=1e-3, lr_critic=1e-3,
+    def __init__(self, state_dim, action_dim, max_action, epsilon, lr=1e-3, lr_critic=1e-3,
                  gamma=0.95, tau=0.01):
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -21,12 +21,14 @@ class MADDPGAgent:
         self.actor = Actor(state_dim, max_action)
         self.actor_target = Actor(state_dim, max_action)
         self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
 
         # critic networks (centralized)
-        self.critic = None
-        self.critic_target = None
-        self.critic_optimizer = None
+        total_state_dim = state_dim
+        total_action_dim = action_dim
+        self.critic = Critic(total_state_dim, total_action_dim)
+        self.critic_target = Critic(total_state_dim, total_action_dim)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
 
     def select_action(self, state):
         state = torch.FloatTensor(state).unsqueeze(0)

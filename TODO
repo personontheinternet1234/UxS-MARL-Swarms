@@ -1,6 +1,6 @@
-- 3 dimensional
 - communications and meshing (observations are only shared to those in mesh)
 - obstacles
-- grpo?
-- non-training, just execution option
 - better memory for swarm
+- non-training, just execution option
+- 3 dimensional
+- grpo?

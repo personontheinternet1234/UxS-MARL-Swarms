@@ -37,20 +37,14 @@ def load_weights(flag):
         if checkpoint['critic_state_dict'] and maddpg_agent is not None:
             total_state_dim = state_dim
             total_action_dim = action_dim
-            maddpg_agent.critic = Critic(total_state_dim, total_action_dim)
-            maddpg_agent.critic_target = Critic(total_state_dim, total_action_dim)
             maddpg_agent.critic.load_state_dict(checkpoint['critic_state_dict'])
             maddpg_agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
-            maddpg_agent.critic_optimizer = optim.Adam(maddpg_agent.critic.parameters(), lr=lr)
             maddpg_agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
     else:
-        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action, epsilon, lr_actor=lr, lr_critic=lr, gamma=gamma, tau=0.01)
+        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action, epsilon, lr=lr, lr_critic=lr, gamma=gamma, tau=0.01)
         total_state_dim = state_dim
         total_action_dim = action_dim
-        maddpg_agent.critic = Critic(total_state_dim, total_action_dim)
-        maddpg_agent.critic_target = Critic(total_state_dim, total_action_dim)
         maddpg_agent.critic_target.load_state_dict(maddpg_agent.critic.state_dict())
-        maddpg_agent.critic_optimizer = optim.Adam(maddpg_agent.critic.parameters(), lr=lr)
 
     return maddpg_agent
 
@@ -195,8 +189,6 @@ for episode in range(episodes):
             if event.type == QUIT:
                 exit_flag = True
         if exit_flag:
-            # while save_weights_ans != "y" and save_weights_ans != "n":
-            #     save_weights_ans = input("Save Weights? (y/n): ")
             break
         if my_world.controllable_uuv != None:
             if keys[pygame.K_w]:
