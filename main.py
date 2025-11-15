@@ -62,15 +62,16 @@ lr = 1e-3
 # defaults
 default_num_agents = 15
 default_num_enemies = 10
+default_num_barriers = 5
 default_episodes = 1000
 
 # outside stuff
 load_weights_ans = 0
 show_sim_ans = 0
 save_weights_ans = 0
-print("")
-num_agents_ans = input("How Many Agents? (int): ")
+num_agents_ans = input("\nHow Many Agents? (int): ")
 num_enemies_ans = input("How Many Enemies? (int): ")
+num_barriers_ans = input("How Many Barriers? (int): ")
 num_episodes_ans = input("How Many Episodes? (int): ")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
@@ -79,8 +80,8 @@ while show_sim_ans != "y" and show_sim_ans != "n":
     show_sim_ans = input("Show Sim? (y/n): ")
 
 if load_weights_ans == "y":
+    epsilon = 0.001
     maddpg_agent = load_weights(True)
-    epsilon = 0.01
 else:
     maddpg_agent = load_weights(False)
 if show_sim_ans == "y":
@@ -95,6 +96,10 @@ if num_enemies_ans == "":
     num_enemies = default_num_enemies
 else:
     num_enemies = int(num_enemies_ans)
+if num_barriers_ans == "":
+    num_barriers = default_num_barriers
+else:
+    num_barriers = int(num_barriers_ans)
 if num_episodes_ans == "":
     episodes = default_episodes
 else:
@@ -151,7 +156,11 @@ for episode in range(episodes):
             decision_making = "random"
         else:
             decision_making = "escape"
+        decision_making = "random"
         my_world.add_enemy_uuv_random(yellow, decision_making)
+
+    for i in range(num_barriers):
+        my_world.add_barrier_random(100, (50,50,50))
 
     episode_reward = 0
     episode_actor_loss = []
@@ -287,6 +296,7 @@ for episode in range(episodes):
         break
 
     epsilon = max(epsilon_min, epsilon * epsilon_decay)
+    maddpg_agent.epsilon = epsilon
 
     episode_rewards.append(episode_reward)
     if episode_actor_loss:

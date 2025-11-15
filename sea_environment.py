@@ -83,6 +83,7 @@ class World():
         self.particles = []
         self.uuvs = []
         self.explosions = []
+        self.barriers = []
 
         self.controllable_uuv = None
 
@@ -107,9 +108,6 @@ class World():
         """Accumulate rewards for an agent"""
         self.agent_rewards[agent_id] = reward
 
-    def add_particle(self, x, y, radius, color):
-        self.particles.append(Particle(x, y, radius, color, self, self.screen))
-
     def add_swarm_uuv_random(self, color, policy_net):
         x = random.randint(50, self.screen_width - 50)
         y = random.randint(50, self.screen_height - 50)
@@ -129,6 +127,22 @@ class World():
 
         self.add_enemy_uuv(enemy_x, enemy_y, color, decision_making)
 
+    def add_barrier_random(self, width, color):
+        x = random.randint(50, self.screen_width - 50)
+        y = random.randint(50, self.screen_height - 50)
+        dir = np.array([random.uniform(-1,1), random.uniform(-1,1)])
+        unit_vec_dir = dir / np.linalg.norm(dir)
+
+        for uuv in self.uuvs:
+            if distance((x, y), (uuv.x, uuv.y)) < self.spawn_spacing:
+                x = random.randint(100, self.screen_width - 100)
+                y = random.randint(100, self.screen_height - 100)
+
+        self.add_barrier(x, y, unit_vec_dir, width, color)
+
+    def add_particle(self, x, y, radius, color):
+        self.particles.append(Particle(x, y, radius, color, self, self.screen))
+
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
         self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
         self.id_tracker += 1
@@ -146,6 +160,9 @@ class World():
     def add_explosion(self, x, y, duration, radius, color):
         self.explosions.append(Explosion(x, y, duration, radius, color, self, self.screen))
 
+    def add_barrier(self, x, y, direction, radius, color):
+        self.barriers.append(Barrier(x, y, direction, radius, color, self, self.screen))
+
     def tick(self):
         for p in self.particles:
             p.tick()
@@ -153,6 +170,8 @@ class World():
             u.tick()
         for e in self.explosions:
             e.tick()
+        for b in self.barriers:
+            b.tick()
 
         self.screen_width = self.screen.get_size()[0]
         self.screen_height = self.screen.get_size()[1]
@@ -161,6 +180,7 @@ class World():
         self.uuvs = []
         self.particles = []
         self.explosions = []
+        self.barriers = []
         self.controllable_uuv = None
         self.agent_rewards = {}
         self.id_tracker = 0
@@ -348,9 +368,6 @@ class SwarmUUV(UUV):
                 my_mesh_observations.append(swarmuuv.observations)
         if len(my_mesh_observations) > 0:
             my_mesh_observations = np.concatenate(my_mesh_observations)
-            # print(self.observations)
-            # print(my_mesh_observations)
-            # print()
 
         smallest_dist = float("inf")
         closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
@@ -399,6 +416,16 @@ class SwarmUUV(UUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
                         self.world.set_reward(self.id, -0.5)
+
+        for b in self.world.barriers:
+            b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
+            b_start_y = b.y - int(0.5 * (b.radius * b.direction[1]))
+            b_end_x = b.x + int(0.5 * (b.radius * b.direction[0]))
+            b_end_y = b.y + int(0.5 * (b.radius * b.direction[1]))
+            if dist_point_to_segment(self.x, self.y, b_start_x, b_start_y, b_end_x, b_end_y,) <= self.radius:
+                self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+                self.world.set_reward(self.id, -1.0)
+
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -477,6 +504,19 @@ class Explosion(Particle):
         if self.lifetime <=0 :
             try_to_remove(self.world.explosions, self)
 
+class Barrier(Particle):
+
+    def __init__(self, startx, starty, direction, radius, color, world:World, screen):
+        super().__init__(startx, starty, radius, color, world, screen)
+        self.direction = direction
+
+    def tick(self):
+        start_x = self.x - int(0.5 * (self.radius * self.direction[0]))
+        start_y = self.y - int(0.5 * (self.radius * self.direction[1]))
+        end_x = self.x + int(0.5 * (self.radius * self.direction[0]))
+        end_y = self.y + int(0.5 * (self.radius * self.direction[1]))
+        pygame.draw.line(self.screen, self.color, (start_x, start_y), (end_x, end_y), 3)
+
 def normalize_vector_l2(vector):
     norm = np.linalg.norm(vector)
     if norm == 0:
@@ -491,3 +531,20 @@ def try_to_remove(list, object):
 
 def distance(point1, point2):
     return ((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)**0.5
+
+def dist_point_to_segment(px, py, x1, y1, x2, y2):
+    vx, vy = x2 - x1, y2 - y1
+    wx, wy = px - x1, py - y1
+    c1 = vx * wx + vy * wy
+
+    if c1 <= 0:
+        return (px - x1)**2 + (py - y1)**2
+
+    c2 = vx * vx + vy * vy
+    if c2 <= c1:
+        return (px - x2)**2 + (py - y2)**2
+
+    b = c1 / c2
+    bx = x1 + b * vx
+    by = y1 + b * vy
+    return (px - bx)**2 + (py - by)**2
