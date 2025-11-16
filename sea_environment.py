@@ -86,19 +86,18 @@ WORLD CLASS
 
 class World():
 
-    def __init__(self, screen, mesh_ans):
+    def __init__(self, screen):
         self.screen = screen
 
         self.particles = []
         self.uuvs = []
         self.explosions = []
         self.barriers = []
-
+        self.controllable_uuv = None
         self.uuv_lookup = {}
         self.mesh_colors = {}  # {frozenset(mesh_ids): color}
-        self.mesh_ans = mesh_ans
-
-        self.controllable_uuv = None
+        self.mesh_ans = False
+        self.id_tracker = 0
 
         self.screen_width = self.screen.get_size()[0]
         self.screen_height = self.screen.get_size()[1]
@@ -107,12 +106,11 @@ class World():
 
         self.sonar_range_forward = 300
         self.sonar_range_heartbeat = 300
-
-        self.id_tracker = 0
+        self.max_hops = 2
 
         self.agent_rewards = {}  # {agent_id: reward}
 
-        self.use_policy_after = 50
+        self.use_policy_after = 50  # default ticks before policy used - tends to be changed
 
     def get_and_clear_reward(self, agent_id):
         """Get accumulated reward and reset"""
@@ -160,7 +158,7 @@ class World():
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
-        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, color, policy_net, self, self.screen, self.id_tracker)
+        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, self.max_hops, color, policy_net, self, self.screen, self.id_tracker)
         self.uuvs.append(uuv)
         self.uuv_lookup[uuv.id] = uuv
         self.id_tracker += 1
@@ -363,7 +361,7 @@ class UUV(Particle):
 
 class SwarmUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, sonar_range_forward, color, maddpg_agent, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
         self.mesh = {}
@@ -378,11 +376,13 @@ class SwarmUUV(UUV):
 
         self.nearest_target = [0,0,0,0,0]
 
+        self.last_distance = float("inf")
+
         self.observation_cone = 180
 
         self.sonar_range_forward = sonar_range_forward
 
-        self.ttl = 3  # time to live / hops before message stops traveling
+        self.ttl = max_hops  # time to live / hops before message stops traveling
 
     def tick(self):
         self.world.set_reward(self.id, -0.05)
@@ -437,6 +437,10 @@ class SwarmUUV(UUV):
                 smallest_dist = tested_dist
                 closest_enemy = [observation[0], observation[1], observation[2], observation[3], 1]  # x, y, vel_vel, true
                 self.nearest_target = closest_enemy
+
+        if smallest_dist < self.last_distance:
+            self.world.set_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
+            self.last_distance = smallest_dist
 
         delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
 
@@ -506,7 +510,7 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, EnemyUUV):
-                        self.world.set_reward(self.id, 10)
+                        self.world.set_reward(self.id, 15)
                     elif isinstance(u, SwarmUUV):
                         self.world.set_reward(self.id, -1)
 
@@ -518,7 +522,6 @@ class SwarmUUV(UUV):
             if dist_point_to_segment(self.x, self.y, b_start_x, b_start_y, b_end_x, b_end_y,) <= self.radius:
                 self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                 self.world.set_reward(self.id, -1.0)
-
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -568,7 +571,7 @@ class EnemyUUV(UUV):
         self.go_to_waypoint()
 
         if seen is not None:
-            pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.2 * self.radius)
+            pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.4 * self.radius)
         super().tick()
 
 class ControllableUUV(UUV):

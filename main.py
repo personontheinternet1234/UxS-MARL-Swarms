@@ -27,7 +27,7 @@ class ReplayBuffer:
 
 def load_weights(flag):
     if flag:
-        checkpoint = torch.load("models/g_weights.pt", weights_only=False)
+        checkpoint = torch.load("models/weights.pt", weights_only=False)
         params = checkpoint['hyperparameters']
         maddpg_agent = MADDPGAgent( params['state_dim'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
         maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
@@ -77,9 +77,9 @@ num_barriers_ans = input("How Many Barriers? (int): ")
 num_episodes_ans = input("How Many Episodes? (int): ")
 num_ticks_ans = input("How many Ticks? (int): ")
 mesh_ans = input("Mesh? (y/n): ")
+decision_making_ans = input("Decision Making? (random/escape/static/mixed): ")
+print("")
 
-while decision_making_ans != "random" and decision_making_ans != "escape" and decision_making_ans != "static" and decision_making_ans != "mixed" and decision_making_ans != "":
-    decision_making_ans = input("Decision Making? (random/escape/static/mixed): ")
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
 while show_sim_ans != "y" and show_sim_ans != "n":
@@ -148,11 +148,12 @@ clock = pygame.time.Clock()
 pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
-my_world = World(screen, mesh_ans)
+my_world = World(screen)
 
 # time stuff
 update_after = 1000
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+my_world.mesh_ans = mesh_ans
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
