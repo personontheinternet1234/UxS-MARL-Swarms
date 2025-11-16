@@ -27,7 +27,7 @@ class ReplayBuffer:
 
 def load_weights(flag):
     if flag:
-        checkpoint = torch.load("models/maddpg_weights.pt", weights_only=False)
+        checkpoint = torch.load("models/g_weights.pt", weights_only=False)
         params = checkpoint['hyperparameters']
         maddpg_agent = MADDPGAgent( params['state_dim'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
         maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
@@ -62,8 +62,10 @@ lr = 1e-3
 # defaults
 default_num_agents = 15
 default_num_enemies = 10
-default_num_barriers = 5
+default_num_barriers = 0
 default_episodes = 1000
+default_ticks = 400
+decision_making_ans = None
 
 # outside stuff
 load_weights_ans = 0
@@ -73,17 +75,16 @@ num_agents_ans = input("\nHow Many Agents? (int): ")
 num_enemies_ans = input("How Many Enemies? (int): ")
 num_barriers_ans = input("How Many Barriers? (int): ")
 num_episodes_ans = input("How Many Episodes? (int): ")
+num_ticks_ans = input("How many Ticks? (int): ")
+mesh_ans = input("Mesh? (y/n): ")
 
+while decision_making_ans != "random" and decision_making_ans != "escape" and decision_making_ans != "static" and decision_making_ans != "mixed" and decision_making_ans != "":
+    decision_making_ans = input("Decision Making? (random/escape/static/mixed): ")
 while load_weights_ans != "y" and load_weights_ans != "n":
     load_weights_ans = input("Load Weights? (y/n): ")
 while show_sim_ans != "y" and show_sim_ans != "n":
     show_sim_ans = input("Show Sim? (y/n): ")
 
-if load_weights_ans == "y":
-    epsilon = 0.001
-    maddpg_agent = load_weights(True)
-else:
-    maddpg_agent = load_weights(False)
 if show_sim_ans == "y":
     show_sim = True
 else:
@@ -104,6 +105,24 @@ if num_episodes_ans == "":
     episodes = default_episodes
 else:
     episodes = int(num_episodes_ans)
+if num_ticks_ans == "":
+    max_ticks = default_ticks
+else:
+    max_ticks = int(num_ticks_ans)
+if mesh_ans == "y":
+    mesh_ans = True
+else:
+    mesh_ans = False
+if decision_making_ans == "":
+    decision_making = "random"
+else:
+    decision_making = decision_making_ans
+if load_weights_ans == "y":
+    epsilon = 0.001
+    maddpg_agent = load_weights(True)
+else:
+    maddpg_agent = load_weights(False)
+
 print(f"")
 if load_weights_ans == "y":
     print(f"Loaded Weights")
@@ -129,11 +148,10 @@ clock = pygame.time.Clock()
 pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
-my_world = World(screen)
+my_world = World(screen, mesh_ans)
 
 # time stuff
 update_after = 1000
-max_ticks = 400
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
 
 # replay buffer
@@ -152,11 +170,11 @@ for episode in range(episodes):
         my_world.add_swarm_uuv_random(blue, maddpg_agent)
 
     for i in range(num_enemies):
-        if episode <= 4/5 * episodes:
-            decision_making = "random"
-        else:
-            decision_making = "escape"
-        decision_making = "random"
+        if decision_making_ans == "mixed":
+            if episode <= 4/5 * episodes:
+                decision_making = "random"
+            else:
+                decision_making = "escape"
         my_world.add_enemy_uuv_random(yellow, decision_making)
 
     for i in range(num_barriers):
@@ -174,19 +192,19 @@ for episode in range(episodes):
         for event in pygame.event.get():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
-                color = blue
                 dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
                 unit_vec_dir = dir / np.linalg.norm(dir)
-                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, color, maddpg_agent)
+                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, blue, maddpg_agent)
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_g:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
-                    color = (200, 200, 200)
-                    my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), color)
+                    my_world.add_controllable_uuv(mouse_x, mouse_y, np.array([0,1]), (200, 200, 200))
+                if event.key == pygame.K_e:
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    my_world.add_enemy_uuv(mouse_x, mouse_y, yellow, decision_making)
                 if event.key == pygame.K_p:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
-                    color = white
-                    my_world.add_particle(mouse_x, mouse_y, 7, color)
+                    my_world.add_particle(mouse_x, mouse_y, 7, white)
                     for uuv in my_world.uuvs:
                         if isinstance(uuv, SwarmUUV):
                             uuv.add_waypoint((mouse_x, mouse_y))
@@ -314,7 +332,7 @@ pygame.quit()
 
 def save_weights():
     print("Training Done")
-    save_path = "models/maddpg_weights.pt"
+    save_path = "models/weights.pt"
     torch.save({
         'actor_state_dict': maddpg_agent.actor.state_dict(),
         'actor_target_state_dict': maddpg_agent.actor_target.state_dict(),

@@ -6,6 +6,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import uuid
+
+"""
+ML / torch stuff
+"""
 
 class MADDPGAgent:
     def __init__(self, state_dim, action_dim, max_action, epsilon, lr=1e-3, lr_critic=1e-3,
@@ -75,9 +80,13 @@ class Critic(nn.Module):
         x = F.relu(self.fc2(x))
         return self.out(x)
 
+"""
+WORLD CLASS
+"""
+
 class World():
 
-    def __init__(self, screen):
+    def __init__(self, screen, mesh_ans):
         self.screen = screen
 
         self.particles = []
@@ -85,12 +94,19 @@ class World():
         self.explosions = []
         self.barriers = []
 
+        self.uuv_lookup = {}
+        self.mesh_colors = {}  # {frozenset(mesh_ids): color}
+        self.mesh_ans = mesh_ans
+
         self.controllable_uuv = None
 
         self.screen_width = self.screen.get_size()[0]
         self.screen_height = self.screen.get_size()[1]
 
         self.spawn_spacing = 10
+
+        self.sonar_range_forward = 300
+        self.sonar_range_heartbeat = 300
 
         self.id_tracker = 0
 
@@ -144,7 +160,9 @@ class World():
         self.particles.append(Particle(x, y, radius, color, self, self.screen))
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
-        self.uuvs.append(SwarmUUV(x, y, direction, 5, color, policy_net, self, self.screen, self.id_tracker))
+        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, color, policy_net, self, self.screen, self.id_tracker)
+        self.uuvs.append(uuv)
+        self.uuv_lookup[uuv.id] = uuv
         self.id_tracker += 1
 
     def add_controllable_uuv(self, x, y, direction, color):
@@ -163,6 +181,26 @@ class World():
     def add_barrier(self, x, y, direction, radius, color):
         self.barriers.append(Barrier(x, y, direction, radius, color, self, self.screen))
 
+    def world_send_message_handling(self, asking_uuv, message):
+        for u in self.uuvs:
+            if isinstance(u, SwarmUUV):
+                if distance((asking_uuv.x, asking_uuv.y), (u.x, u.y)) <= self.sonar_range_forward:
+                    u.receive_message(message)
+
+    def color_meshes_helper(self):
+        if self.mesh_ans:
+            color = (random.uniform(0,255), random.uniform(0,255), random.uniform(0,255))
+            for u in self.uuvs:
+                if isinstance(u, SwarmUUV):
+                    mesh_key = frozenset(u.mesh.keys())
+                    if mesh_key not in self.mesh_colors:
+                        self.mesh_colors[mesh_key] = (
+                            color[0],
+                            color[1],
+                            color[2]
+                        )
+                    u.color = self.mesh_colors[mesh_key]
+
     def tick(self):
         for p in self.particles:
             p.tick()
@@ -172,6 +210,10 @@ class World():
             e.tick()
         for b in self.barriers:
             b.tick()
+
+        self.uuv_lookup = {u.id: u for u in self.uuvs}
+
+        self.color_meshes_helper()
 
         self.screen_width = self.screen.get_size()[0]
         self.screen_height = self.screen.get_size()[1]
@@ -321,8 +363,12 @@ class UUV(Particle):
 
 class SwarmUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, color, maddpg_agent, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, sonar_range_forward, color, maddpg_agent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
+
+        self.mesh = {}
+
+        self.sent_packets_already = []
 
         self.observations = []
 
@@ -332,13 +378,25 @@ class SwarmUUV(UUV):
 
         self.nearest_target = [0,0,0,0,0]
 
-        self.observation_cone = 360
+        self.observation_cone = 180
+
+        self.sonar_range_forward = sonar_range_forward
+
+        self.ttl = 3  # time to live / hops before message stops traveling
 
     def tick(self):
         self.world.set_reward(self.id, -0.05)
 
         # observing
         self.collect_observations()
+
+        # meshing
+        if self.tick_counter % self.world.use_policy_after == 0 and self.world.mesh_ans:
+            if len(self.sent_packets_already) > 5:
+                self.sent_packets_already.pop(0)
+            self.send_heartbeat(self.ttl)
+            self.update_personal_mesh()
+            self.send_observations(self.ttl)
 
         # decision making
         if self.tick_counter % self.world.use_policy_after == 0:
@@ -361,28 +419,25 @@ class SwarmUUV(UUV):
 
         delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2], closest_friendly[3], closest_friendly[4]]
 
-        # np helps for speed here
-        my_mesh_observations = []
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV) and len(swarmuuv.observations) > 0:
-                my_mesh_observations.append(swarmuuv.observations)
-        if len(my_mesh_observations) > 0:
-            my_mesh_observations = np.concatenate(my_mesh_observations)
+        full_obs = []
+        if not self.world.mesh_ans:
+            for uuv in self.world.uuvs:
+                if isinstance(uuv, SwarmUUV) and len(uuv.observations) > 0:
+                    full_obs.append(uuv.observations)
+            if len(full_obs) > 0:
+                full_obs = np.concatenate(full_obs)
+        else:
+            full_obs = self.observations
 
         smallest_dist = float("inf")
         closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
-        for observation in my_mesh_observations:
+        for observation in full_obs:
             tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
             if tested_dist < smallest_dist:
                 smallest_dist = tested_dist
                 closest_enemy = [observation[0], observation[1], observation[2], observation[3], 1]  # x, y, vel_vel, true
                 self.nearest_target = closest_enemy
 
-        # limited memory of unseen enemies
-        if closest_enemy[-1] == 0 or distance((self.x, self.y), (self.nearest_target[0], self.nearest_target[1])) < distance((self.x, self.y), (closest_enemy[0], closest_enemy[1])):  # calculated closest enemy doesn't exist OR is further than the most recent closest enemy
-            delta_enemy = [self.nearest_target[0] - self.x, self.nearest_target[1] - self.y, self.nearest_target[2], self.nearest_target[3], self.nearest_target[4]]
-        else:
-            delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
         delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
 
         return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
@@ -404,8 +459,46 @@ class SwarmUUV(UUV):
                 current_angle = self.get_current_angle()
                 angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)
-                if angle_diff < self.observation_cone:
+                if angle_diff < self.observation_cone and distance((self.x, self.y), (enemy.x, enemy.y)) <= self.sonar_range_forward:
                     self.observations.append(np.hstack([enemy.x, enemy.y, enemy.vel_vec]))
+
+    def send_message_to_world(self, message):
+        self.world.world_send_message_handling(self, message)
+
+    def pass_message_on(self, message):
+        if message["ttl"] > 0:
+            continued_message = message.copy()
+            continued_message["ttl"] = int(message["ttl"]) - 1
+            self.send_message_to_world(continued_message)  # passing it on
+
+    def send_heartbeat(self, ttl):
+        message = {"heartbeat":1, "ttl":ttl, "sender_id":self.id, "message_id":uuid.uuid4()}
+        self.send_message_to_world(message)
+
+    def send_observations(self, ttl):
+        message = {"observations": self.observations, "ttl": ttl, "sender_id":self.id, "message_id":uuid.uuid4()}
+        self.send_message_to_world(message)
+
+    def receive_message(self, message):
+        if message["message_id"] in self.sent_packets_already:  # to minimize redundant packet sending - if I've sent it before, why send it again
+            return
+        self.pass_message_on(message)
+        self.sent_packets_already.append(message["message_id"])
+        if message.get("heartbeat"):
+            time_left = 5
+            self.mesh[int(message["sender_id"])] = time_left
+        if message.get("observations"):
+            received_observations = message["observations"]
+            for observation in received_observations:
+                if not any(np.array_equal(observation, o) for o in self.observations):
+                    self.observations.append(observation)
+
+    def update_personal_mesh(self):
+        for friendly_id in list(self.mesh.keys()):
+            if self.mesh[friendly_id] == 0:
+                del self.mesh[friendly_id]
+            else:
+                self.mesh[friendly_id] -= 1
 
     def check_collision(self):
         for u in self.world.uuvs:
@@ -415,7 +508,7 @@ class SwarmUUV(UUV):
                     if isinstance(u, EnemyUUV):
                         self.world.set_reward(self.id, 10)
                     elif isinstance(u, SwarmUUV):
-                        self.world.set_reward(self.id, -0.5)
+                        self.world.set_reward(self.id, -1)
 
         for b in self.world.barriers:
             b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
@@ -438,23 +531,23 @@ class EnemyUUV(UUV):
         self.decision_making = decision_making
 
     def tick(self):
-        self.color = (100, 100, 10)
+        self.color = (100, 100, 100)
+        seen = None
+
         smallest_dist = float("inf")
         closest_uuv = None
-        for uuv in self.world.uuvs:
-
-            if isinstance(uuv, SwarmUUV):  # should I render myself as observed
-                swarmuuv_current_angle = uuv.get_current_angle()
-                swarmuuv_angle_to_enemy = math.atan2(self.y - uuv.y, self.x - uuv.x) * 180 / math.pi
+        for swarmuuv in self.world.uuvs:
+            if isinstance(swarmuuv, SwarmUUV):  # should I render myself as observed
+                swarmuuv_current_angle = swarmuuv.get_current_angle()
+                swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
                 angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
-                if angle_diff < uuv.observation_cone:
-                    self.color = (255, 255, 50)
-
-            if uuv.id != self.id:  # how I should run away (rudimentary)
-                tested_dist = distance((self.x, self.y), (uuv.x, uuv.y))
+                if angle_diff < swarmuuv.observation_cone and distance((swarmuuv.x, swarmuuv.y), (self.x, self.y)) <= swarmuuv.sonar_range_forward:
+                    seen = swarmuuv.color
+            if swarmuuv.id != self.id:  # how I should run away (rudimentary)
+                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
                 if tested_dist < smallest_dist:
                     smallest_dist = tested_dist
-                    closest_uuv = uuv
+                    closest_uuv = swarmuuv
 
         if self.decision_making == "static":
             ...
@@ -474,6 +567,8 @@ class EnemyUUV(UUV):
 
         self.go_to_waypoint()
 
+        if seen is not None:
+            pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.2 * self.radius)
         super().tick()
 
 class ControllableUUV(UUV):
@@ -488,7 +583,7 @@ class ControllableUUV(UUV):
                 swarmuuv_current_angle = swarmuuv.get_current_angle()
                 swarmuuv_angle_to_enemy = math.atan2(self.y - swarmuuv.y, self.x - swarmuuv.x) * 180 / math.pi
                 angle_diff = abs(swarmuuv_angle_to_enemy - swarmuuv_current_angle)
-                if angle_diff < swarmuuv.observation_cone:
+                if angle_diff < swarmuuv.observation_cone and distance((swarmuuv.x, swarmuuv.y), (self.x, self.y)) <= swarmuuv.sonar_range_forward:
                     self.color = (255, 255, 255)
         super().tick()
 
