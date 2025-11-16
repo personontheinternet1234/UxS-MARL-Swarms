@@ -112,6 +112,8 @@ class World():
 
         self.use_policy_after = 50  # default ticks before policy used - tends to be changed
 
+        self.color_allocator = ColorAllocator()
+
     def get_and_clear_reward(self, agent_id):
         """Get accumulated reward and reset"""
         reward = self.agent_rewards.get(agent_id, 0)
@@ -187,16 +189,12 @@ class World():
 
     def color_meshes_helper(self):
         if self.mesh_ans:
-            color = (random.uniform(0,255), random.uniform(0,255), random.uniform(0,255))
             for u in self.uuvs:
                 if isinstance(u, SwarmUUV):
                     mesh_key = frozenset(u.mesh.keys())
                     if mesh_key not in self.mesh_colors:
-                        self.mesh_colors[mesh_key] = (
-                            color[0],
-                            color[1],
-                            color[2]
-                        )
+                        self.mesh_colors[mesh_key] = self.color_allocator.next()
+
                     u.color = self.mesh_colors[mesh_key]
 
     def tick(self):
@@ -217,13 +215,15 @@ class World():
         self.screen_height = self.screen.get_size()[1]
 
     def reset(self):
-        self.uuvs = []
         self.particles = []
+        self.uuvs = []
         self.explosions = []
         self.barriers = []
         self.controllable_uuv = None
-        self.agent_rewards = {}
+        self.uuv_lookup = {}
+        self.mesh_colors = {}
         self.id_tracker = 0
+        self.agent_rewards = {}
 
 class Particle:
 
@@ -257,6 +257,8 @@ class UUV(Particle):
         self.waypoints = []
 
         self.tick_counter = 0
+
+        self.spawn_prot = 100
 
     def tick(self):
         super().tick()
@@ -297,6 +299,9 @@ class UUV(Particle):
         self.direction = (math.cos(angle_rad), math.sin(angle_rad))
 
     def check_collision(self):
+        if self.tick_counter < self.spawn_prot:
+            return
+
         # should I be dead / no longer exist?
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -505,6 +510,9 @@ class SwarmUUV(UUV):
                 self.mesh[friendly_id] -= 1
 
     def check_collision(self):
+        if self.tick_counter < self.spawn_prot:
+            return
+
         for u in self.world.uuvs:
             if u.id != self.id:
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
@@ -646,3 +654,31 @@ def dist_point_to_segment(px, py, x1, y1, x2, y2):
     bx = x1 + b * vx
     by = y1 + b * vy
     return (px - bx)**2 + (py - by)**2
+
+class ColorAllocator:
+    def __init__(self):
+        self.palette = [
+        (230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200),
+        (245, 130, 48), (145, 30, 180), (70, 240, 240), (240, 50, 230),
+        (210, 245, 60), (250, 190, 190), (0, 128, 128), (230, 190, 255),
+        (170, 110, 40), (255, 250, 200), (128, 0, 0), (170, 255, 195),
+        (128, 128, 0), (255, 215, 180), (0, 0, 128), (128, 128, 128),
+        (255, 255, 255), (100, 149, 237), (255, 140, 0),
+        (34, 139, 34), (186, 85, 211), (72, 61, 139),
+        (218, 165, 32), (127, 255, 212), (199, 21, 133), (30, 144, 255),
+        (154, 205, 50), (255, 105, 180), (139, 0, 139), (60, 179, 113),
+        (233, 150, 122), (0, 206, 209), (123, 104, 238)
+        ]
+        self.index = 0
+
+    def next(self):
+        if self.index < len(self.palette):
+            c = self.palette[self.index]
+            self.index += 1
+            return c
+        else:
+            # fallback if exhausted
+            import random
+            return (random.randint(0,255),
+                    random.randint(0,255),
+                    random.randint(0,255))

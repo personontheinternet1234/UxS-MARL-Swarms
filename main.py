@@ -76,8 +76,8 @@ num_enemies_ans = input("How Many Enemies? (int): ")
 num_barriers_ans = input("How Many Barriers? (int): ")
 num_episodes_ans = input("How Many Episodes? (int): ")
 num_ticks_ans = input("How many Ticks? (int): ")
-mesh_ans = input("Mesh? (y/n): ")
 decision_making_ans = input("Decision Making? (random/escape/static/mixed): ")
+mesh_ans = input("Mesh? (y/n): ")
 print("")
 
 while load_weights_ans != "y" and load_weights_ans != "n":
@@ -109,14 +109,14 @@ if num_ticks_ans == "":
     max_ticks = default_ticks
 else:
     max_ticks = int(num_ticks_ans)
-if mesh_ans == "y":
-    mesh_ans = True
-else:
-    mesh_ans = False
 if decision_making_ans == "":
     decision_making = "random"
 else:
     decision_making = decision_making_ans
+if mesh_ans == "y":
+    mesh_ans = True
+else:
+    mesh_ans = False
 if load_weights_ans == "y":
     epsilon = 0.001
     maddpg_agent = load_weights(True)
@@ -192,10 +192,7 @@ for episode in range(episodes):
         keys = pygame.key.get_pressed()
         for event in pygame.event.get():
             if event.type == pygame.MOUSEBUTTONDOWN:
-                mouse_x, mouse_y = pygame.mouse.get_pos()
-                dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
-                unit_vec_dir = dir / np.linalg.norm(dir)
-                my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, blue, maddpg_agent)
+                ...
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_g:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -227,6 +224,11 @@ for episode in range(episodes):
                 my_world.controllable_uuv.turn_left()
             if keys[pygame.K_d]:
                 my_world.controllable_uuv.turn_right()
+        if keys[pygame.K_v]:
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
+            unit_vec_dir = dir / np.linalg.norm(dir)
+            my_world.add_swarm_uuv(mouse_x, mouse_y, unit_vec_dir, blue, maddpg_agent)
 
         # set previous states
         if tick % my_world.use_policy_after == 0:
