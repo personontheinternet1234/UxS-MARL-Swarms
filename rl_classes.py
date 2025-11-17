@@ -56,13 +56,19 @@ class Actor(nn.Module):
         self.max_action = max_action
 
     def forward(self, enemy_feats, state):
-        # enemy_feats: (N,4)
-        # state: either (state_dim,) or (1,state_dim)
+        # enemy_feats: (N,4) or list of (N_i, 4) tensors for batching
+        # state: (state_dim,) or (B, state_dim)
 
-        enemy_embed = self.attn_pool(enemy_feats)  # (embed_dim,)
+        # Handle both single and batched inputs
+        if isinstance(enemy_feats, list):
+            # Batched case
+            enemy_embed, _ = self.attn_pool.forward_batched(enemy_feats)  # (B, embed_dim)
+            x = torch.cat([enemy_embed, state], dim=-1)  # (B, embed_dim + state_dim)
+        else:
+            # Single case
+            enemy_embed = self.attn_pool(enemy_feats)  # (embed_dim,)
+            x = torch.cat([enemy_embed, state], dim=-1)  # (embed_dim + state_dim,)
 
-        # final concat
-        x = torch.cat([enemy_embed, state], dim=-1)  # (embed_dim + state_dim,)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
 
@@ -99,8 +105,6 @@ class AttentionPool(nn.Module):
         enemy_feats: (N, 4) for N enemies
         returns: (embed_dim,)
         """
-        # print("enemy_feats.shape entering pool:", enemy_feats.shape)
-        # print(enemy_feats)
         K = self.key(enemy_feats)  # (N, D)
         V = self.value(enemy_feats)  # (N, D)
 
@@ -111,3 +115,47 @@ class AttentionPool(nn.Module):
         # weighted sum of values
         pooled = (attn_weights.unsqueeze(-1) * V).sum(dim=-2)
         return pooled
+
+    def forward_batched(self, enemy_feats_list, max_enemies=None):
+        """
+        Batched attention processing for multiple agents.
+
+        Args:
+            enemy_feats_list: List of (N_i, 4) tensors for batch_size agents
+            max_enemies: Maximum number of enemies to pad to (auto-compute if None)
+
+        Returns:
+            pooled_embeddings: (batch_size, embed_dim)
+            attention_masks: (batch_size, max_enemies) bool tensor
+        """
+        if max_enemies is None:
+            max_enemies = max(ef.shape[0] for ef in enemy_feats_list)
+
+        batch_size = len(enemy_feats_list)
+        device = next(self.parameters()).device
+
+        # Pad all enemy feature sequences to max_enemies
+        padded_feats = torch.zeros(batch_size, max_enemies, 4, device=device)
+        attention_masks = torch.zeros(batch_size, max_enemies, dtype=torch.bool, device=device)
+
+        for i, ef in enumerate(enemy_feats_list):
+            n_enemies = ef.shape[0]
+            padded_feats[i, :n_enemies] = ef.to(device)
+            attention_masks[i, :n_enemies] = True
+
+        # Compute keys and values for all agents at once
+        K = self.key(padded_feats)  # (batch_size, max_enemies, embed_dim)
+        V = self.value(padded_feats)  # (batch_size, max_enemies, embed_dim)
+
+        # Compute attention logits
+        attn_logits = (K @ self.query)  # (batch_size, max_enemies)
+
+        # Mask padding positions before softmax
+        attn_logits = attn_logits.masked_fill(~attention_masks, float('-inf'))
+        attn_weights = F.softmax(attn_logits, dim=1)  # (batch_size, max_enemies)
+        attn_weights = attn_weights.masked_fill(~attention_masks, 0.0)
+
+        # Weighted sum of values
+        pooled = (attn_weights.unsqueeze(-1) * V).sum(dim=1)  # (batch_size, embed_dim)
+
+        return pooled, attention_masks

@@ -301,16 +301,13 @@ for episode in range(episodes):
                 next_states_t  = torch.FloatTensor(next_states)
                 dones_t        = torch.FloatTensor(dones).unsqueeze(1)
 
+                # Convert to tensor lists (avoid redundant conversions)
                 enemy_feats_t = [torch.FloatTensor(e) for e in enemy_feats_per_agent]
                 next_enemy_feats_t = [torch.FloatTensor(e) for e in next_enemy_feats_per_agent]
 
                 with torch.no_grad():
-                    next_actions = []
-                    for ef, st in zip(next_enemy_feats_t, next_states_t):
-                        a = maddpg_agent.actor_target(ef, st)
-                        next_actions.append(a)
-
-                    next_actions_t = torch.stack(next_actions, dim=0)  # (B, action_dim)
+                    # Batched forward pass for target actor
+                    next_actions_t = maddpg_agent.actor_target(next_enemy_feats_t, next_states_t)  # (B, action_dim)
 
                     target_q = maddpg_agent.critic_target(next_states_t, next_actions_t)
                     target_q = rewards_t + (1 - dones_t) * maddpg_agent.gamma * target_q
@@ -324,13 +321,8 @@ for episode in range(episodes):
                 episode_critic_loss.append(critic_loss.item())
 
 
-                # update actor
-                actor_actions = []
-                for ef, st in zip(enemy_feats_t, states_t):
-                    a = maddpg_agent.actor(ef, st)
-                    actor_actions.append(a)
-
-                actor_actions_t = torch.stack(actor_actions, dim=0)
+                # update actor (batched)
+                actor_actions_t = maddpg_agent.actor(enemy_feats_t, states_t)
 
                 actor_loss = -maddpg_agent.critic(states_t, actor_actions_t).mean()
 
