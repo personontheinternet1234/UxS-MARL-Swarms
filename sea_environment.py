@@ -42,7 +42,6 @@ class World():
         return reward
 
     def set_reward(self, agent_id, reward):
-        """Accumulate rewards for an agent"""
         self.agent_rewards[agent_id] = reward
 
     def add_swarm_uuv_random(self, color, policy_net):
@@ -128,6 +127,15 @@ class World():
         for b in self.barriers:
             b.tick()
 
+        for swarm_uuv in self.uuvs:
+            if isinstance(swarm_uuv, SwarmUUV):
+                for enemy_uuv in self.uuvs:
+                    if isinstance(enemy_uuv, EnemyUUV):
+                        dist = distance((swarm_uuv.x, swarm_uuv.y), (swarm_uuv.x, swarm_uuv.y))
+                        if dist < swarm_uuv.last_distance:
+                            swarm_uuv.last_distance = dist
+                            self.set_reward(swarm_uuv.id, 2)
+
         self.uuv_lookup = {u.id: u for u in self.uuvs}
 
         self.color_meshes_helper()
@@ -177,9 +185,11 @@ class UUV(Particle):
 
         self.waypoints = []
 
+        self.waypoint_color = (150, 150, 150)
+
         self.tick_counter = 0
 
-        self.spawn_prot = 100
+        self.spawn_prot = 0
 
     def tick(self):
         super().tick()
@@ -265,8 +275,8 @@ class UUV(Particle):
                 self.vel_vec = np.array([0,0])
             else:
                 # not yet arrived at waypoint
-                pygame.draw.circle(self.screen, (150, 150, 150), (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
-                pygame.draw.line(self.screen, (150, 150, 150), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
+                pygame.draw.circle(self.screen, self.waypoint_color, (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
+                pygame.draw.line(self.screen, self.waypoint_color, (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
 
                 current_angle = self.get_current_angle()
                 desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
@@ -335,7 +345,9 @@ class SwarmUUV(UUV):
     def take_action(self):
         state = self.get_state()
         enemy_feats = self.get_enemies()
-        action = self.maddpg_agent.select_action(enemy_feats, state)
+        action, exploring = self.maddpg_agent.select_action(enemy_feats, state)
+
+        self.waypoint_color = (150, 255, 150) if exploring else (150, 150, 150)
 
         delta_x = action[0]
         delta_y = action[1]
@@ -346,7 +358,9 @@ class SwarmUUV(UUV):
 
     def get_state(self):
         """Returns the current state vector"""
-        return np.hstack([self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
+        vel = self.vel_vec
+        acl = self.acl_vec
+        return np.hstack([self.direction, vel, acl]).astype(np.float32)
 
     def collect_observations(self):
         self.observations = []
@@ -374,7 +388,12 @@ class SwarmUUV(UUV):
         for enemy in full_obs:
             rel_x = enemy[0] - self.x
             rel_y = enemy[1] - self.y
-            enemy_feat = [rel_x, rel_y, enemy[2], enemy[3]]  # rel_x, rel_y, vel_x, vel_y
+            rx = float(rel_x)
+            ry = float(rel_y)
+            vx = float(enemy[2])
+            vy = float(enemy[3])
+
+            enemy_feat = [rx, ry, vx, vy]
             enemy_feats.append(enemy_feat)
 
         if len(enemy_feats) == 0:
@@ -431,7 +450,8 @@ class SwarmUUV(UUV):
                     if isinstance(u, EnemyUUV):
                         self.world.set_reward(self.id, 15)
                     elif isinstance(u, SwarmUUV):
-                        self.world.set_reward(self.id, -1)
+                        # self.world.set_reward(self.id, -0.5)
+                        ...
 
         for b in self.world.barriers:
             b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
@@ -453,7 +473,7 @@ class EnemyUUV(UUV):
         self.decision_making = decision_making
 
     def tick(self):
-        self.color = (100, 100, 100)
+        self.color = (190, 25, 25)
         seen = None
 
         smallest_dist = float("inf")

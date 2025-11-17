@@ -41,7 +41,7 @@ def load_weights(flag):
     if flag:
         checkpoint = torch.load("models/weights.pt", weights_only=False)
         params = checkpoint['hyperparameters']
-        maddpg_agent = MADDPGAgent( params['state_dim'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
+        maddpg_agent = MADDPGAgent( params['state_dim'], params['feats_dim_1d'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
         maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
         maddpg_agent.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
         maddpg_agent.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
@@ -53,7 +53,7 @@ def load_weights(flag):
             maddpg_agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
             maddpg_agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
     else:
-        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action, epsilon, lr=lr, lr_critic=lr, gamma=gamma, tau=0.01)
+        maddpg_agent = MADDPGAgent(state_dim, feats_dim_1d, action_dim, max_action, epsilon, lr=lr, gamma=gamma, tau=0.01)
         total_state_dim = state_dim
         total_action_dim = action_dim
         maddpg_agent.critic_target.load_state_dict(maddpg_agent.critic.state_dict())
@@ -62,6 +62,7 @@ def load_weights(flag):
 
 # hyperparameters
 state_dim = 6
+feats_dim_1d = 4
 action_dim = 2
 max_action = 50
 batch_size = 200
@@ -72,8 +73,8 @@ gamma = 0.95
 lr = 1e-3
 
 # defaults
-default_num_agents = 15
-default_num_enemies = 10
+default_num_agents = 10
+default_num_enemies = 15
 default_num_barriers = 0
 default_episodes = 1000
 default_ticks = 400
@@ -122,7 +123,7 @@ if num_ticks_ans == "":
 else:
     max_ticks = int(num_ticks_ans)
 if decision_making_ans == "":
-    decision_making = "random"
+    decision_making = "static"
 else:
     decision_making = decision_making_ans
 if mesh_ans == "y":
@@ -163,12 +164,15 @@ pygame.display.set_caption("UxS MARL SWARMS")
 my_world = World(screen)
 
 # time stuff
-update_after = 1000
+update_after = 1500
 my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
 my_world.mesh_ans = mesh_ans
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)
+
+# diagnostic print limiter for actor actions
+ATT_DIAG_PRINTS = 0
 
 # training loop
 episode_rewards = []
@@ -317,6 +321,11 @@ for episode in range(episodes):
 
                 maddpg_agent.critic_optimizer.zero_grad()
                 critic_loss.backward()
+                # gradient clipping to stabilize training
+                try:
+                    torch.nn.utils.clip_grad_norm_(maddpg_agent.critic.parameters(), 1.0)
+                except Exception:
+                    pass
                 maddpg_agent.critic_optimizer.step()
                 episode_critic_loss.append(critic_loss.item())
 
@@ -324,10 +333,24 @@ for episode in range(episodes):
                 # update actor (batched)
                 actor_actions_t = maddpg_agent.actor(enemy_feats_t, states_t)
 
+                # diagnostic printing for actor outputs when attention debug is enabled
+                try:
+                    if 'DEBUG_ATTENTION' in globals() and DEBUG_ATTENTION and ATT_DIAG_PRINTS < 10:
+                        ATT_DIAG_PRINTS += 1
+                        print(f"[ACTOR] actions mean: {actor_actions_t.mean().item():.4f}, std: {actor_actions_t.std().item():.4f}")
+                        sample = actor_actions_t[:5].detach().cpu().numpy()
+                        print(f"[ACTOR] sample actions (first 5): {sample}")
+                except Exception:
+                    pass
+
                 actor_loss = -maddpg_agent.critic(states_t, actor_actions_t).mean()
 
                 maddpg_agent.actor_optimizer.zero_grad()
                 actor_loss.backward()
+                try:
+                    torch.nn.utils.clip_grad_norm_(maddpg_agent.actor.parameters(), 1.0)
+                except Exception:
+                    pass
                 maddpg_agent.actor_optimizer.step()
                 episode_actor_loss.append(actor_loss.item())
 
@@ -335,9 +358,9 @@ for episode in range(episodes):
                 maddpg_agent.soft_update(maddpg_agent.actor_target, maddpg_agent.actor)
                 maddpg_agent.soft_update(maddpg_agent.critic_target, maddpg_agent.critic)
 
-        if show_sim:
+        if show_sim and episode % 5 == 0:
             pygame.display.flip()
-            clock.tick(50)
+            clock.tick(200)
 
     if exit_flag:
         break
@@ -375,6 +398,7 @@ def save_weights():
         'critic_losses': critic_losses,
         'hyperparameters': {
             'state_dim': state_dim,
+            'feats_dim_1d': feats_dim_1d,
             'action_dim': action_dim,
             'max_action': max_action,
             'gamma': maddpg_agent.gamma,
