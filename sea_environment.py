@@ -2,87 +2,8 @@ import pygame,random
 from pygame.locals import *
 import numpy as np
 import math
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 import uuid
-
-"""
-ML / torch stuff
-"""
-
-class MADDPGAgent:
-    def __init__(self, state_dim, action_dim, max_action, epsilon, lr=1e-3, lr_critic=1e-3,
-                 gamma=0.95, tau=0.01):
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.max_action = max_action
-        self.epsilon = epsilon
-        self.gamma = gamma
-        self.tau = tau
-
-        # actor networks (homogeneous)
-        self.actor = Actor(state_dim, max_action)
-        self.actor_target = Actor(state_dim, max_action)
-        self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
-
-        # critic networks (centralized)
-        total_state_dim = state_dim
-        total_action_dim = action_dim
-        self.critic = Critic(total_state_dim, total_action_dim)
-        self.critic_target = Critic(total_state_dim, total_action_dim)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
-
-    def select_action(self, state):
-        state = torch.FloatTensor(state).unsqueeze(0)
-        action = self.actor(state).detach().cpu().numpy()[0]
-        if random.random() < self.epsilon:
-            action = np.random.normal(0, self.max_action, size=self.action_dim)
-        return action
-
-    def soft_update(self, target, source):
-        for target_param, param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-class Actor(nn.Module):
-    def __init__(self, state_dim, max_action):
-        super().__init__()
-        self.fc1 = nn.Linear(state_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
-        self.dir = nn.Linear(128, 2)
-        self.distance = nn.Linear(128, 1)
-        self.max_action = max_action
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-
-        direction = F.normalize(self.dir(x), dim=-1)
-        actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
-
-        delta = direction * actual_distance
-        return delta
-
-class Critic(nn.Module):
-    def __init__(self, total_state_dim, total_action_dim):
-        super().__init__()
-        self.fc1 = nn.Linear(total_state_dim + total_action_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.out = nn.Linear(128, 1)
-
-    def forward(self, states, actions):
-        x = torch.cat([states, actions], dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.out(x)
-
-"""
-WORLD CLASS
-"""
+from rl_classes import *
 
 class World():
 
@@ -366,7 +287,7 @@ class UUV(Particle):
 
 class SwarmUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent: MADDPGAgent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
         self.mesh = {}
@@ -411,19 +332,34 @@ class SwarmUUV(UUV):
         # physics, collision
         super().tick()
 
+    def take_action(self):
+        state = self.get_state()
+        enemy_feats = self.get_enemies()
+        action = self.maddpg_agent.select_action(enemy_feats, state)
+
+        delta_x = action[0]
+        delta_y = action[1]
+
+        self.waypoints = []
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
+        self.current_action = action
+
     def get_state(self):
         """Returns the current state vector"""
-        smallest_dist = float("inf")
-        closest_friendly = np.zeros(2 + len(self.vel_vec) + 1)
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
-                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
-                if tested_dist < smallest_dist:
-                    smallest_dist = tested_dist
-                    closest_friendly = np.hstack([swarmuuv.x, swarmuuv.y, swarmuuv.vel_vec, 1])
+        return np.hstack([self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
 
-        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2], closest_friendly[3], closest_friendly[4]]
+    def collect_observations(self):
+        self.observations = []
+        for enemy in self.world.uuvs:
+            if isinstance(enemy, EnemyUUV) or isinstance(enemy, ControllableUUV):
+                current_angle = self.get_current_angle()
+                angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
+                angle_diff = abs(angle_to_enemy - current_angle)
+                if angle_diff < self.observation_cone and distance((self.x, self.y), (enemy.x, enemy.y)) <= self.sonar_range_forward:
+                    feat = np.array([enemy.x, enemy.y, enemy.vel_vec[0], enemy.vel_vec[1]], dtype=np.float32)
+                    self.observations.append(feat)
 
+    def get_enemies(self):
         full_obs = []
         if not self.world.mesh_ans:
             for uuv in self.world.uuvs:
@@ -434,42 +370,17 @@ class SwarmUUV(UUV):
         else:
             full_obs = self.observations
 
-        smallest_dist = float("inf")
-        closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
-        for observation in full_obs:
-            tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
-            if tested_dist < smallest_dist:
-                smallest_dist = tested_dist
-                closest_enemy = [observation[0], observation[1], observation[2], observation[3], 1]  # x, y, vel_vel, true
-                self.nearest_target = closest_enemy
+        enemy_feats = []
+        for enemy in full_obs:
+            rel_x = enemy[0] - self.x
+            rel_y = enemy[1] - self.y
+            enemy_feat = [rel_x, rel_y, enemy[2], enemy[3]]  # rel_x, rel_y, vel_x, vel_y
+            enemy_feats.append(enemy_feat)
 
-        if smallest_dist < self.last_distance:
-            self.world.set_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
-            self.last_distance = smallest_dist
-
-        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
-
-        return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
-
-    def take_action(self):
-        state = self.get_state()
-        action = self.maddpg_agent.select_action(state)
-
-        delta_x, delta_y = action
-
-        self.waypoints = []
-        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
-        self.current_action = action
-
-    def collect_observations(self):
-        self.observations = []
-        for enemy in self.world.uuvs:
-            if isinstance(enemy, EnemyUUV) or isinstance(enemy, ControllableUUV):
-                current_angle = self.get_current_angle()
-                angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
-                angle_diff = abs(angle_to_enemy - current_angle)
-                if angle_diff < self.observation_cone and distance((self.x, self.y), (enemy.x, enemy.y)) <= self.sonar_range_forward:
-                    self.observations.append(np.hstack([enemy.x, enemy.y, enemy.vel_vec]))
+        if len(enemy_feats) == 0:
+            # no enemies → give a single zero enemy
+            return np.zeros((1, 4), dtype=np.float32)
+        return np.array(enemy_feats, dtype=np.float32)
 
     def send_message_to_world(self, message):
         self.world.world_send_message_handling(self, message)

@@ -3,6 +3,7 @@ from pygame.locals import *
 import numpy as np
 import math
 from sea_environment import *
+from rl_classes import *
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,14 +14,25 @@ class ReplayBuffer:
     def __init__(self, max_size=100000):
         self.buffer = deque(maxlen=max_size)
 
-    def add(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+    def add(self, enemy_feats, state, action, reward, next_enemy_feats, next_state, done):
+        self.buffer.append(
+            (enemy_feats, state, action, reward, next_enemy_feats, next_state, done)
+        )
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-        return (np.array(states), np.array(actions), np.array(rewards),
-                np.array(next_states), np.array(dones))
+        enemy_feats_per_agent, states, actions, rewards, next_enemy_feats_per_agent, next_states, dones = zip(*batch)
+
+        # enemy_feats and next_enemy_feats stay lists of arrays!
+        return (
+            list(enemy_feats_per_agent),
+            np.array(states, dtype=np.float32),
+            np.array(actions, dtype=np.float32),
+            np.array(rewards, dtype=np.float32),
+            list(next_enemy_feats_per_agent),
+            np.array(next_states, dtype=np.float32),
+            np.array(dones),
+        )
 
     def __len__(self):
         return len(self.buffer)
@@ -49,9 +61,9 @@ def load_weights(flag):
     return maddpg_agent
 
 # hyperparameters
-state_dim = 16
+state_dim = 6
 action_dim = 2
-max_action = 20
+max_action = 50
 batch_size = 200
 epsilon = 0.5
 epsilon_decay = 0.995
@@ -235,11 +247,13 @@ for episode in range(episodes):
             prev_states = []
             prev_actions = []
             prev_agent_ids = []
+            prev_enemy_feats_per_agent = []
             for uuv in my_world.uuvs:
                 if isinstance(uuv, SwarmUUV):
                     prev_states.append(uuv.get_state())
                     prev_actions.append(uuv.current_action)
                     prev_agent_ids.append(uuv.id)
+                    prev_enemy_feats_per_agent.append(uuv.get_enemies())
 
         # step / tick environment
         screen.fill(black)
@@ -260,31 +274,45 @@ for episode in range(episodes):
                     reward = my_world.get_and_clear_reward(agent_id)
 
                     if prev_actions[i] is not None:
-                        replay_buffer.add(prev_states[i], prev_actions[i],
-                                        reward, next_state, False)
+                        prev_enemy_feats = prev_enemy_feats_per_agent[i]
+                        next_enemy_feats = uuv.get_enemies()
+
+                        replay_buffer.add(prev_enemy_feats, prev_states[i], prev_actions[i],
+                                        reward, next_enemy_feats, next_state, False)
                         episode_reward += reward
                 else:
                     reward = my_world.get_and_clear_reward(agent_id)
 
                     if prev_actions[i] is not None:
                         # use prev_state as next_state for terminal, agent is done
-                        replay_buffer.add(prev_states[i], prev_actions[i],
-                                        reward, prev_states[i], True)
+                        prev_enemy_feats = prev_enemy_feats_per_agent[i]
+
+                        replay_buffer.add(prev_enemy_feats, prev_states[i], prev_actions[i],
+                                        reward, prev_enemy_feats, prev_states[i], True)
                         episode_reward += reward
 
             # training step
             if len(replay_buffer) > update_after:
-                states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
+                enemy_feats_per_agent, states, actions, rewards, next_enemy_feats_per_agent, next_states, dones = replay_buffer.sample(batch_size)
 
-                states_t = torch.FloatTensor(states)
-                actions_t = torch.FloatTensor(actions)
-                rewards_t = torch.FloatTensor(rewards).unsqueeze(1)
-                next_states_t = torch.FloatTensor(next_states)
-                dones_t = torch.FloatTensor(dones).unsqueeze(1)
+                states_t       = torch.FloatTensor(states)  # (B, state_dim)
+                actions_t      = torch.FloatTensor(actions)  # (B, action_dim)
+                rewards_t      = torch.FloatTensor(rewards).unsqueeze(1)
+                next_states_t  = torch.FloatTensor(next_states)
+                dones_t        = torch.FloatTensor(dones).unsqueeze(1)
+
+                enemy_feats_t = [torch.FloatTensor(e) for e in enemy_feats_per_agent]
+                next_enemy_feats_t = [torch.FloatTensor(e) for e in next_enemy_feats_per_agent]
 
                 with torch.no_grad():
-                    next_actions = maddpg_agent.actor_target(next_states_t)
-                    target_q = maddpg_agent.critic_target(next_states_t, next_actions)
+                    next_actions = []
+                    for ef, st in zip(next_enemy_feats_t, next_states_t):
+                        a = maddpg_agent.actor_target(ef, st)
+                        next_actions.append(a)
+
+                    next_actions_t = torch.stack(next_actions, dim=0)  # (B, action_dim)
+
+                    target_q = maddpg_agent.critic_target(next_states_t, next_actions_t)
                     target_q = rewards_t + (1 - dones_t) * maddpg_agent.gamma * target_q
 
                 current_q = maddpg_agent.critic(states_t, actions_t)
@@ -297,8 +325,14 @@ for episode in range(episodes):
 
 
                 # update actor
-                actor_actions = maddpg_agent.actor(states_t)
-                actor_loss = -maddpg_agent.critic(states_t, actor_actions).mean()
+                actor_actions = []
+                for ef, st in zip(enemy_feats_t, states_t):
+                    a = maddpg_agent.actor(ef, st)
+                    actor_actions.append(a)
+
+                actor_actions_t = torch.stack(actor_actions, dim=0)
+
+                actor_loss = -maddpg_agent.critic(states_t, actor_actions_t).mean()
 
                 maddpg_agent.actor_optimizer.zero_grad()
                 actor_loss.backward()
