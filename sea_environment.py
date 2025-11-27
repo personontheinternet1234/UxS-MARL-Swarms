@@ -2,87 +2,8 @@ import pygame,random
 from pygame.locals import *
 import numpy as np
 import math
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 import uuid
-
-"""
-ML / torch stuff
-"""
-
-class MADDPGAgent:
-    def __init__(self, state_dim, action_dim, max_action, epsilon, lr=1e-3, lr_critic=1e-3,
-                 gamma=0.95, tau=0.01):
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.max_action = max_action
-        self.epsilon = epsilon
-        self.gamma = gamma
-        self.tau = tau
-
-        # actor networks (homogeneous)
-        self.actor = Actor(state_dim, max_action)
-        self.actor_target = Actor(state_dim, max_action)
-        self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
-
-        # critic networks (centralized)
-        total_state_dim = state_dim
-        total_action_dim = action_dim
-        self.critic = Critic(total_state_dim, total_action_dim)
-        self.critic_target = Critic(total_state_dim, total_action_dim)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
-
-    def select_action(self, state):
-        state = torch.FloatTensor(state).unsqueeze(0)
-        action = self.actor(state).detach().cpu().numpy()[0]
-        if random.random() < self.epsilon:
-            action = np.random.normal(0, self.max_action, size=self.action_dim)
-        return action
-
-    def soft_update(self, target, source):
-        for target_param, param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-class Actor(nn.Module):
-    def __init__(self, state_dim, max_action):
-        super().__init__()
-        self.fc1 = nn.Linear(state_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
-        self.dir = nn.Linear(128, 2)
-        self.distance = nn.Linear(128, 1)
-        self.max_action = max_action
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-
-        direction = F.normalize(self.dir(x), dim=-1)
-        actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
-
-        delta = direction * actual_distance
-        return delta
-
-class Critic(nn.Module):
-    def __init__(self, total_state_dim, total_action_dim):
-        super().__init__()
-        self.fc1 = nn.Linear(total_state_dim + total_action_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.out = nn.Linear(128, 1)
-
-    def forward(self, states, actions):
-        x = torch.cat([states, actions], dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.out(x)
-
-"""
-WORLD CLASS
-"""
+from rl_classes import *
 
 class World():
 
@@ -172,7 +93,7 @@ class World():
         self.id_tracker += 1
 
     def add_enemy_uuv(self, x, y, color, decision_making):
-        self.uuvs.append(EnemyUUV(x, y, [0,1], 5, color, decision_making, self, self.screen, self.id_tracker))
+        self.uuvs.append(EnemyUUV(x, y, [0,1], 7, color, decision_making, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
@@ -366,7 +287,7 @@ class UUV(Particle):
 
 class SwarmUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent, world: World, screen, id):
+    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent:MADDPGAgent, world: World, screen, id):
         super().__init__(startx, starty, direction, radius, color, world, screen, id)
 
         self.mesh = {}
@@ -390,7 +311,8 @@ class SwarmUUV(UUV):
         self.ttl = max_hops  # time to live / hops before message stops traveling
 
     def tick(self):
-        self.world.set_reward(self.id, -0.05)
+        if self.tick_counter % self.world.use_policy_after == 0:
+            self.world.set_reward(self.id, -0.05)
 
         # observing
         self.collect_observations()
@@ -453,13 +375,14 @@ class SwarmUUV(UUV):
 
     def take_action(self):
         state = self.get_state()
-        action = self.maddpg_agent.select_action(state)
+        action_data = self.maddpg_agent.select_action(state)
 
-        delta_x, delta_y = action
+        exploring = action_data[0]
+        delta_x, delta_y = action_data[1]
 
         self.waypoints = []
-        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
-        self.current_action = action
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y), exploring])
+        self.current_action = action_data[1]
 
     def collect_observations(self):
         self.observations = []
@@ -509,6 +432,32 @@ class SwarmUUV(UUV):
             else:
                 self.mesh[friendly_id] -= 1
 
+    def go_to_waypoint(self):
+        if len(self.waypoints) > 0:
+            if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < (self.radius):
+                # arrived at waypoint
+                self.waypoints.pop(0)
+                self.vel_vec = np.array([0,0])
+            else:
+                # not yet arrived at waypoint
+                color = (120,210,120) if self.waypoints[0][2] == True else (150,150,150)
+                pygame.draw.circle(self.screen, color, (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
+                pygame.draw.line(self.screen, color, (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
+
+                current_angle = self.get_current_angle()
+                desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
+                angle_diff = (desired_angle - current_angle + 180) % 360 - 180
+                distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
+
+                if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
+                    if np.linalg.norm(self.vel_vec) < 2:  # if not yet at max speed
+                        self.increase_throttle(0.2)
+                else:
+                    if angle_diff > 0:
+                        self.turn_right()
+                    else:
+                        self.turn_left()
+
     def check_collision(self):
         if self.tick_counter < self.spawn_prot:
             return
@@ -542,7 +491,7 @@ class EnemyUUV(UUV):
         self.decision_making = decision_making
 
     def tick(self):
-        self.color = (100, 100, 100)
+        self.color = (200, 30, 30)
         seen = None
 
         smallest_dist = float("inf")
@@ -579,7 +528,7 @@ class EnemyUUV(UUV):
         self.go_to_waypoint()
 
         if seen is not None:
-            pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.4 * self.radius)
+            pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.3 * self.radius)
         super().tick()
 
 class ControllableUUV(UUV):

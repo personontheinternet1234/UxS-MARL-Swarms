@@ -63,9 +63,14 @@ lr = 1e-3
 default_num_agents = 15
 default_num_enemies = 10
 default_num_barriers = 0
-default_episodes = 1000
+default_episodes = 500
 default_ticks = 400
 decision_making_ans = None
+
+update_after = 1500
+use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+show_sim_interval = 5
+
 
 # outside stuff
 load_weights_ans = 0
@@ -149,10 +154,7 @@ pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
 my_world = World(screen)
-
-# time stuff
-update_after = 1000
-my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+my_world.use_policy_after = use_policy_after  # policy & training is used this many ticks (right now 5x per second)
 my_world.mesh_ans = mesh_ans
 
 # replay buffer
@@ -310,8 +312,11 @@ for episode in range(episodes):
                 maddpg_agent.soft_update(maddpg_agent.critic_target, maddpg_agent.critic)
 
         if show_sim:
-            pygame.display.flip()
-            clock.tick(50)
+            if episode % show_sim_interval == 0:
+                pygame.display.flip()
+                clock.tick(50)
+            else:
+                pygame.display.flip()
 
     if exit_flag:
         break
