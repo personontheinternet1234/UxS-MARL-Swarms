@@ -88,8 +88,8 @@ def load_weights(flag):
 # hyperparameters
 personal_state_dim = 6
 observed_object_state_dim = 5
-observable_enemies = 5
-observable_friendlies = 0
+observable_enemies = 8
+observable_friendlies = 5
 total_state_dim = personal_state_dim + observed_object_state_dim * (observable_enemies + observable_friendlies)
 action_dim = 2
 max_action = 50
@@ -101,11 +101,11 @@ gamma = 0.95
 lr = 1e-3
 
 # defaults
-default_num_agents = 15
+default_num_agents = 10
 default_num_enemies = 10
 default_num_barriers = 0
 default_episodes = 500
-default_ticks = 400
+default_ticks = 500
 decision_making_ans = None
 
 update_after = 1500
@@ -196,6 +196,10 @@ pygame.display.set_caption("UxS MARL SWARMS")
 my_world = World(screen)
 my_world.use_policy_after = use_policy_after  # policy & training is used this many ticks (right now 5x per second)
 my_world.mesh_ans = mesh_ans
+my_world.personal_state_dim = personal_state_dim
+my_world.observed_object_state_dim = observed_object_state_dim
+my_world.observable_enemies = observable_enemies
+my_world.observable_friendlies = observable_friendlies
 
 # replay buffer
 replay_buffer = ReplayBuffer(max_size=100000)

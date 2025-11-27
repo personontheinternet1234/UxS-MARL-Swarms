@@ -31,11 +31,10 @@ class World():
 
         self.agent_rewards = {}  # {agent_id: reward}
 
-        self.use_policy_after = 10  # default ticks before policy used - tends to be changed
-
-        self.personal_state_dim = 6
-        self.observed_object_state_dim = 5
-        self.observable_enemies = 5
+        self.use_policy_after = 0  # default ticks before policy used - tends to be changed
+        self.personal_state_dim = 0
+        self.observed_object_state_dim = 0
+        self.observable_enemies = 0
         self.observable_friendlies = 0
 
         self.color_allocator = ColorAllocator()
@@ -302,6 +301,10 @@ class SwarmUUV(UUV):
     def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent:MADDPGAgent, world: World, id):
         super().__init__(startx, starty, direction, radius, color, world, id)
 
+        self.max_speed = 2
+        self.max_throttle = 0.4
+        self.turn_rate = 3
+
         self.mesh = {}
 
         self.sent_packets_already = []
@@ -360,38 +363,63 @@ class SwarmUUV(UUV):
 
     def get_observation_state(self):
         if not self.world.mesh_ans:
-            full_obs = [
-                uuv.observations
-                for uuv in self.world.uuvs
-                if isinstance(uuv, SwarmUUV) and len(uuv.observations) > 0
-            ]
-            full_obs = np.concatenate(full_obs) if len(full_obs) > 0 else np.empty((0, self.world.observed_object_state_dim - 1))
+            full_obs_enemies = []
+            for uuv in self.world.uuvs:
+                if isinstance(uuv, SwarmUUV) and len(uuv.observations) > 0:
+                    full_obs_enemies.append(uuv.observations)
+            full_obs_enemies = np.concatenate(full_obs_enemies) if len(full_obs_enemies) > 0 else np.empty((0, self.world.observed_object_state_dim - 1))
         else:
-            full_obs = np.asarray(self.observations, dtype=np.float32)
-
-        if len(full_obs) == 0:
-            return np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
-
-        enemy_positions = full_obs[:, :2]                     # (N, 2)
-        deltas = enemy_positions - np.array([self.x, self.y]) # (N, 2)
-        dists = np.linalg.norm(deltas, axis=1)                # (N,)
-
+            full_obs_enemies = np.asarray(self.observations, dtype=np.float32)
+        full_obs_enemies = np.asarray(full_obs_enemies, dtype=np.float32)
+        if full_obs_enemies.ndim == 1:
+            full_obs_enemies = full_obs_enemies.reshape(1, -1)
+        enemy_positions = full_obs_enemies[:, :2]
+        deltas = enemy_positions - np.array([self.x, self.y])
+        dists = np.linalg.norm(deltas, axis=1)
         idx = np.argsort(dists)[:self.world.observable_enemies]
-
-        selected = full_obs[idx]                              # (k, 4)
-        selected_deltas = deltas[idx]                         # (k, 2)
-
+        selected = full_obs_enemies[idx]
+        selected_deltas = deltas[idx]
         n = selected_deltas.shape[0]
+        enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
+        enemies[:n, 0:2] = selected_deltas
+        enemies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+        enemies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
 
-        result = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
-        result[:n, 0:2] = selected_deltas
-        result[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
-        result[:n, self.world.observed_object_state_dim - 1] = 1.0
+        if len(idx) > 0:
+            smallest_dist = dists[idx[0]]
+            if smallest_dist < self.last_distance:
+                self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
+                self.last_distance = smallest_dist
 
-        smallest_dist = dists[idx[0]]
-        if smallest_dist < self.last_distance:
-            self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
-            self.last_distance = smallest_dist
+        if not self.world.mesh_ans:
+            full_obs_friendlies = []
+            for uuv in self.world.uuvs:
+                if isinstance(uuv, SwarmUUV):
+                    full_obs_friendlies.append([uuv.x, uuv.y, uuv.vel_vec[0], uuv.vel_vec[1]])
+            full_obs_friendlies = np.concatenate(full_obs_friendlies) if len(full_obs_friendlies) > 0 else np.empty((0, self.world.observed_object_state_dim - 1))
+        else:
+            # TODO: realistic x,y,vel reporting via mesh packets, rn cheating a bit
+            full_obs_friendlies = []
+            for uuv in self.world.uuvs:
+                if isinstance(uuv, SwarmUUV) and uuv.id in self.mesh:
+                    full_obs_friendlies.append([uuv.x - self.x, uuv.y - self.y, uuv.vel_vec, 1])
+            full_obs_friendlies = np.asarray(full_obs_friendlies, dtype=np.float32)
+        full_obs_friendlies = np.asarray(full_obs_friendlies, dtype=np.float32)
+        if full_obs_friendlies.ndim == 1:
+            full_obs_friendlies = full_obs_friendlies.reshape(1, -1)
+        friendly_positions = full_obs_friendlies[:, :2]
+        deltas = friendly_positions - np.array([self.x, self.y])
+        dists = np.linalg.norm(deltas, axis=1)
+        idx = np.argsort(dists)[:self.world.observable_friendlies]
+        selected = full_obs_friendlies[idx]
+        selected_deltas = deltas[idx]
+        n = selected_deltas.shape[0]
+        friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
+        friendlies[:n, 0:2] = selected_deltas
+        friendlies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+        friendlies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
+
+        result = np.vstack((enemies, friendlies))
         return result
 
     def get_state(self):
