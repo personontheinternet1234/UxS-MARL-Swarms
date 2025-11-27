@@ -371,25 +371,27 @@ class SwarmUUV(UUV):
         else:
             full_obs_enemies = np.asarray(self.observations, dtype=np.float32)
         full_obs_enemies = np.asarray(full_obs_enemies, dtype=np.float32)
-        if full_obs_enemies.ndim == 1:
-            full_obs_enemies = full_obs_enemies.reshape(1, -1)
-        enemy_positions = full_obs_enemies[:, :2]
-        deltas = enemy_positions - np.array([self.x, self.y])
-        dists = np.linalg.norm(deltas, axis=1)
-        idx = np.argsort(dists)[:self.world.observable_enemies]
-        selected = full_obs_enemies[idx]
-        selected_deltas = deltas[idx]
-        n = selected_deltas.shape[0]
-        enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
-        enemies[:n, 0:2] = selected_deltas
-        enemies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
-        enemies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
+        if len(full_obs_enemies) > 0:
+            if full_obs_enemies.ndim == 1:
+                full_obs_enemies = full_obs_enemies.reshape(1, -1)
+            enemy_positions = full_obs_enemies[:, :2]
+            deltas = enemy_positions - np.array([self.x, self.y])
+            dists = np.linalg.norm(deltas, axis=1)
+            idx = np.argsort(dists)[:self.world.observable_enemies]
+            selected = full_obs_enemies[idx]
+            selected_deltas = deltas[idx]
+            n = selected_deltas.shape[0]
+            enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
+            enemies[:n, 0:2] = selected_deltas
+            enemies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+            enemies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
 
-        if len(idx) > 0:
             smallest_dist = dists[idx[0]]
             if smallest_dist < self.last_distance:
                 self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
                 self.last_distance = smallest_dist
+        else:
+            enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
 
         if not self.world.mesh_ans:
             full_obs_friendlies = []
@@ -401,23 +403,25 @@ class SwarmUUV(UUV):
             # TODO: realistic x,y,vel reporting via mesh packets, rn cheating a bit
             full_obs_friendlies = []
             for uuv in self.world.uuvs:
-                if isinstance(uuv, SwarmUUV) and uuv.id in self.mesh:
-                    full_obs_friendlies.append([uuv.x - self.x, uuv.y - self.y, uuv.vel_vec, 1])
-            full_obs_friendlies = np.asarray(full_obs_friendlies, dtype=np.float32)
+                if isinstance(uuv, SwarmUUV) and uuv.id in self.mesh and uuv.id != self.id:
+                    full_obs_friendlies.append([uuv.x, uuv.y, uuv.vel_vec[0], uuv.vel_vec[1]])
         full_obs_friendlies = np.asarray(full_obs_friendlies, dtype=np.float32)
-        if full_obs_friendlies.ndim == 1:
-            full_obs_friendlies = full_obs_friendlies.reshape(1, -1)
-        friendly_positions = full_obs_friendlies[:, :2]
-        deltas = friendly_positions - np.array([self.x, self.y])
-        dists = np.linalg.norm(deltas, axis=1)
-        idx = np.argsort(dists)[:self.world.observable_friendlies]
-        selected = full_obs_friendlies[idx]
-        selected_deltas = deltas[idx]
-        n = selected_deltas.shape[0]
-        friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
-        friendlies[:n, 0:2] = selected_deltas
-        friendlies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
-        friendlies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
+        if len(full_obs_friendlies) > 0:
+            if full_obs_friendlies.ndim == 1:
+                full_obs_friendlies = full_obs_friendlies.reshape(1, -1)
+            friendly_positions = full_obs_friendlies[:, :2]
+            deltas = friendly_positions - np.array([self.x, self.y])
+            dists = np.linalg.norm(deltas, axis=1)
+            idx = np.argsort(dists)[:self.world.observable_friendlies]
+            selected = full_obs_friendlies[idx]
+            selected_deltas = deltas[idx]
+            n = selected_deltas.shape[0]
+            friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
+            friendlies[:n, 0:2] = selected_deltas
+            friendlies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+            friendlies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
+        else:
+            friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
 
         result = np.vstack((enemies, friendlies))
         return result
@@ -485,9 +489,9 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, EnemyUUV):
-                        self.world.add_reward(self.id, 15)
+                        self.world.add_reward(self.id, 30)
                     elif isinstance(u, SwarmUUV):
-                        self.world.add_reward(self.id, -1)
+                        self.world.add_reward(self.id, -5)
 
         for b in self.world.barriers:
             b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
@@ -652,7 +656,7 @@ def dist_point_to_segment(px, py, x1, y1, x2, y2):
 class ColorAllocator:
     def __init__(self):
         self.palette = [
-        (230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200),
+        (60, 180, 75), (255, 225, 25), (0, 130, 200),
         (245, 130, 48), (145, 30, 180), (70, 240, 240), (240, 50, 230),
         (210, 245, 60), (250, 190, 190), (0, 128, 128), (230, 190, 255),
         (170, 110, 40), (255, 250, 200), (128, 0, 0), (170, 255, 195),
