@@ -15,9 +15,29 @@ class ReplayBuffer:
         self.buffer = deque(maxlen=max_size)
 
     def add(self, enemy_feats, state, action, reward, next_enemy_feats, next_state, done):
-        self.buffer.append(
-            (enemy_feats, state, action, reward, next_enemy_feats, next_state, done)
-        )
+        # Store copies to avoid later mutation from environment objects
+        def _as_np(x):
+            if x is None:
+                return None
+            try:
+                return np.array(x, dtype=np.float32, copy=True)
+            except Exception:
+                return np.array(x)
+
+        ef = _as_np(enemy_feats)
+        nsf = _as_np(next_enemy_feats)
+        s = _as_np(state)
+        a = _as_np(action)
+        ns = _as_np(next_state)
+
+        # Clip reward to avoid occasional extreme outliers destabilizing learning
+        try:
+            r = float(reward)
+            r = float(np.clip(r, -10.0, 15.0))
+        except Exception:
+            r = 0.0
+
+        self.buffer.append((ef, s, a, r, nsf, ns, bool(done)))
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
@@ -31,7 +51,7 @@ class ReplayBuffer:
             np.array(rewards, dtype=np.float32),
             list(next_enemy_feats_per_agent),
             np.array(next_states, dtype=np.float32),
-            np.array(dones),
+            np.array(dones, dtype=np.float32),
         )
 
     def __len__(self):
@@ -54,8 +74,7 @@ def load_weights(flag):
             maddpg_agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
     else:
         maddpg_agent = MADDPGAgent(state_dim, feats_dim_1d, action_dim, max_action, epsilon, lr=lr, gamma=gamma, tau=0.01)
-        total_state_dim = state_dim
-        total_action_dim = action_dim
+        # Initialize critic target network with current critic weights
         maddpg_agent.critic_target.load_state_dict(maddpg_agent.critic.state_dict())
 
     return maddpg_agent
@@ -66,18 +85,22 @@ feats_dim_1d = 4
 action_dim = 2
 max_action = 50
 batch_size = 200
-epsilon = 0.5
+epsilon = 0.3
 epsilon_decay = 0.995
 epsilon_min = 0.001
 gamma = 0.95
 lr = 1e-3
 
+update_after = 1500
+use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+show_sim_interval = 30
+
 # defaults
-default_num_agents = 10
-default_num_enemies = 15
+default_num_agents = 5
+default_num_enemies = 7
 default_num_barriers = 0
-default_episodes = 1000
-default_ticks = 400
+default_episodes = 500
+default_ticks = 500
 decision_making_ans = None
 
 # outside stuff
@@ -162,10 +185,7 @@ pygame.display.set_caption("UxS MARL SWARMS")
 
 # sim / env
 my_world = World(screen)
-
-# time stuff
-update_after = 1500
-my_world.use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
+my_world.use_policy_after = use_policy_after  # policy & training is used this many ticks (right now 5x per second)
 my_world.mesh_ans = mesh_ans
 
 # replay buffer
@@ -309,6 +329,22 @@ for episode in range(episodes):
                 enemy_feats_t = [torch.FloatTensor(e) for e in enemy_feats_per_agent]
                 next_enemy_feats_t = [torch.FloatTensor(e) for e in next_enemy_feats_per_agent]
 
+                # --- basic batch diagnostics: detect NaNs/empty observations ---
+                B = states_t.shape[0]
+                num_empty = sum(1 for e in enemy_feats_per_agent if (isinstance(e, (list, tuple, np.ndarray)) and np.array(e).size == 0))
+                if len(rewards) > 0 and (np.isnan(rewards).any() or np.isinf(rewards).any()):
+                    print("[TRAINING][WARN] rewards contain NaN/Inf; skipping update")
+                    continue
+
+                if torch.isnan(states_t).any() or torch.isnan(actions_t).any():
+                    print("[TRAINING][WARN] NaN detected in states/actions; skipping update")
+                    continue
+
+                # Occasionally print diagnostics (once per 200 training steps)
+                if len(replay_buffer) % 200 == 0:
+                    # print(f"[TRAINING][INFO] batch_size={B} empty_enemy_frac={num_empty/B:.2f} rewards(mean,min,max)=({rewards.mean():.3f},{rewards.min():.3f},{rewards.max():.3f})")
+                    ...
+
                 with torch.no_grad():
                     # Batched forward pass for target actor
                     next_actions_t = maddpg_agent.actor_target(next_enemy_feats_t, next_states_t)  # (B, action_dim)
@@ -333,16 +369,6 @@ for episode in range(episodes):
                 # update actor (batched)
                 actor_actions_t = maddpg_agent.actor(enemy_feats_t, states_t)
 
-                # diagnostic printing for actor outputs when attention debug is enabled
-                try:
-                    if 'DEBUG_ATTENTION' in globals() and DEBUG_ATTENTION and ATT_DIAG_PRINTS < 10:
-                        ATT_DIAG_PRINTS += 1
-                        print(f"[ACTOR] actions mean: {actor_actions_t.mean().item():.4f}, std: {actor_actions_t.std().item():.4f}")
-                        sample = actor_actions_t[:5].detach().cpu().numpy()
-                        print(f"[ACTOR] sample actions (first 5): {sample}")
-                except Exception:
-                    pass
-
                 actor_loss = -maddpg_agent.critic(states_t, actor_actions_t).mean()
 
                 maddpg_agent.actor_optimizer.zero_grad()
@@ -358,7 +384,7 @@ for episode in range(episodes):
                 maddpg_agent.soft_update(maddpg_agent.actor_target, maddpg_agent.actor)
                 maddpg_agent.soft_update(maddpg_agent.critic_target, maddpg_agent.critic)
 
-        if show_sim and episode % 5 == 0:
+        if show_sim and episode % show_sim_interval == 0:
             pygame.display.flip()
             clock.tick(200)
 

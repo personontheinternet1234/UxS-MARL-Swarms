@@ -31,18 +31,23 @@ class World():
 
         self.agent_rewards = {}  # {agent_id: reward}
 
-        self.use_policy_after = 50  # default ticks before policy used - tends to be changed
+        self.use_policy_after = 10  # default ticks before policy used - tends to be changed
+        self.max_action_step = 50
 
         self.color_allocator = ColorAllocator()
+        self.debug = False
 
     def get_and_clear_reward(self, agent_id):
         """Get accumulated reward and reset"""
         reward = self.agent_rewards.get(agent_id, 0)
         self.agent_rewards[agent_id] = 0  # reset to default
+        if self.debug and reward != 0:
+            print(f"[WORLD][get_and_clear_reward] agent={agent_id} reward_returned={reward:.4f}")
         return reward
 
     def set_reward(self, agent_id, reward):
-        self.agent_rewards[agent_id] = reward
+        # Accumulate reward so small penalties and positive rewards combine
+        self.agent_rewards[agent_id] = self.agent_rewards.get(agent_id, 0) + reward
 
     def add_swarm_uuv_random(self, color, policy_net):
         x = random.randint(50, self.screen_width - 50)
@@ -92,7 +97,7 @@ class World():
         self.id_tracker += 1
 
     def add_enemy_uuv(self, x, y, color, decision_making):
-        self.uuvs.append(EnemyUUV(x, y, [0,1], 5, color, decision_making, self, self.screen, self.id_tracker))
+        self.uuvs.append(EnemyUUV(x, y, np.array([0,1]), 5, color, decision_making, self, self.screen, self.id_tracker))
         self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
@@ -127,14 +132,49 @@ class World():
         for b in self.barriers:
             b.tick()
 
+
+
         for swarm_uuv in self.uuvs:
-            if isinstance(swarm_uuv, SwarmUUV):
-                for enemy_uuv in self.uuvs:
-                    if isinstance(enemy_uuv, EnemyUUV):
-                        dist = distance((swarm_uuv.x, swarm_uuv.y), (swarm_uuv.x, swarm_uuv.y))
-                        if dist < swarm_uuv.last_distance:
-                            swarm_uuv.last_distance = dist
-                            self.set_reward(swarm_uuv.id, 2)
+            if not isinstance(swarm_uuv, SwarmUUV):
+                continue
+
+            # Align reward frequency with policy usage
+            if swarm_uuv.tick_counter % self.use_policy_after != 0:
+                continue
+
+            nearest_dist = float("inf")
+            for other in self.uuvs:
+                if isinstance(other, EnemyUUV) or isinstance(other, ControllableUUV):
+                    d = distance((swarm_uuv.x, swarm_uuv.y), (other.x, other.y))
+                    if d < nearest_dist:
+                        nearest_dist = d
+
+            if nearest_dist == float("inf"):
+                # no visible targets
+                swarm_uuv.last_distance = float("inf")
+                continue
+
+            if swarm_uuv.last_distance == float("inf"):
+                # first measurement — just initialize
+                swarm_uuv.last_distance = nearest_dist
+            else:
+                # positive reward proportional to fractional improvement
+                if nearest_dist < swarm_uuv.last_distance:
+                    progress = swarm_uuv.last_distance - nearest_dist
+                    # normalized by previous distance to keep reward scale bounded
+                    progress_reward = 0.5 * (progress / max(swarm_uuv.last_distance, 1.0))
+                    if math.isfinite(progress_reward) and progress_reward > 0:
+                        if self.debug:
+                            print(f"[WORLD][reward] agent={swarm_uuv.id} progress_reward={progress_reward:.4f} (prev {swarm_uuv.last_distance:.3f} -> {nearest_dist:.3f})")
+                        self.set_reward(swarm_uuv.id, progress_reward)
+                else:
+                    # small penalty for moving away (keeps agents from drifting)
+                    away = nearest_dist - swarm_uuv.last_distance
+                    away_penalty = -0.02 * min(1.0, away / max(swarm_uuv.last_distance, 1.0))
+                    if math.isfinite(away_penalty) and away_penalty != 0:
+                        self.set_reward(swarm_uuv.id, away_penalty)
+
+                swarm_uuv.last_distance = nearest_dist
 
         self.uuv_lookup = {u.id: u for u in self.uuvs}
 
@@ -199,14 +239,14 @@ class UUV(Particle):
         # calculate physics
         self.acl_vec = np.add(self.acl_vec, -0.05 * self.vel_vec)  # friction
         self.vel_vec = np.add(self.vel_vec, self.acl_vec)  # apply acceleration
-        self.vel_vec = np.add(random.uniform(-0.01, 0.01), self.vel_vec)  # randomness - current? idk
+        self.vel_vec = self.vel_vec + np.random.uniform(-0.01, 0.01, size=2)  # randomness - current simulation
 
         # apply physics
         self.x = self.x + self.vel_vec[0]
         self.y = self.y + self.vel_vec[1]
         self.check_collision()
 
-        # idk
+        # reset acceleration
         self.acl_vec = np.array([0,0])
 
     def increase_throttle(self, value=0.05):
@@ -283,7 +323,7 @@ class UUV(Particle):
                 angle_diff = (desired_angle - current_angle + 180) % 360 - 180
                 distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
 
-                if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
+                if abs(angle_diff) < 3:  # if pointing generally the right direction
                     if np.linalg.norm(self.vel_vec) < 1:  # if not yet at max speed
                         self.increase_throttle(0.1)
                 else:
@@ -312,19 +352,56 @@ class SwarmUUV(UUV):
 
         self.nearest_target = [0,0,0,0,0]
 
-        self.last_distance = float("inf")
+        self.last_distance = float("inf")  # will be updated on first measurement
 
-        self.observation_cone = 180
+        self.observation_cone = 360
 
         self.sonar_range_forward = sonar_range_forward
 
         self.ttl = max_hops  # time to live / hops before message stops traveling
+        # smoothed_action holds a short-term filtered action to avoid jitter
+        self.smoothed_action = np.array([0.0, 0.0], dtype=np.float32)
 
     def tick(self):
-        self.world.set_reward(self.id, -0.05)
+        if self.tick_counter % self.world.use_policy_after == 0:
+            # Small per-decision penalty to encourage finding targets but not to
+            # overpower progress rewards. Reduced magnitude to avoid incentivizing
+            # minimal-movement wall-hugging behaviors.
+            self.world.set_reward(self.id, -0.01)
 
         # observing
         self.collect_observations()
+
+        # --- progress reward: give a small positive reward when agent reduces
+        # its distance to the nearest observed enemy. This provides a dense
+        # training signal and encourages agents to move toward targets.
+        try:
+            enemy_feats = self.get_enemies()
+            if enemy_feats is not None and isinstance(enemy_feats, (list, np.ndarray)):
+                ef_arr = np.array(enemy_feats, dtype=np.float32)
+                if ef_arr.size > 0:
+                    # ef_arr contains relative positions [rx, ry, vx, vy]
+                    dists = np.linalg.norm(ef_arr[:, :2], axis=1)
+                    nearest = float(dists.min())
+                    if self.last_distance == float("inf"):
+                        self.last_distance = nearest
+                    else:
+                        if nearest < self.last_distance:
+                            progress_reward = 0.5 * (self.last_distance - nearest) / max(self.last_distance, 1.0)
+                            if math.isfinite(progress_reward) and progress_reward > 0:
+                                self.world.set_reward(self.id, float(progress_reward))
+                        self.last_distance = nearest
+        except Exception:
+            # be conservative: if anything goes wrong, don't crash the sim
+            pass
+
+        # --- wall proximity penalty: discourage hugging walls by applying
+        # a small negative reward when the agent is very close to any screen edge.
+        wall_margin = 20
+        if (self.x < wall_margin or self.y < wall_margin or
+            self.x > (self.world.screen_width - wall_margin) or self.y > (self.world.screen_height - wall_margin)):
+            # small penalty scaled to decision frequency
+            self.world.set_reward(self.id, -0.02)
 
         # meshing
         if self.tick_counter % self.world.use_policy_after == 0 and self.world.mesh_ans:
@@ -360,7 +437,12 @@ class SwarmUUV(UUV):
         """Returns the current state vector"""
         vel = self.vel_vec
         acl = self.acl_vec
-        return np.hstack([self.direction, vel, acl]).astype(np.float32)
+        # Normalize velocity and acceleration to keep state inputs in a
+        # reasonable numerical range for the networks. Typical speeds in
+        # this sim are small; scaling by 5 keeps values near [-1,1].
+        vel_s = vel / 5.0
+        acl_s = acl / 5.0
+        return np.hstack([self.direction, vel_s, acl_s]).astype(np.float32)
 
     def collect_observations(self):
         self.observations = []
@@ -370,6 +452,9 @@ class SwarmUUV(UUV):
                 angle_to_enemy = math.atan2(enemy.y - self.y, enemy.x - self.x) * 180 / math.pi
                 angle_diff = abs(angle_to_enemy - current_angle)
                 if angle_diff < self.observation_cone and distance((self.x, self.y), (enemy.x, enemy.y)) <= self.sonar_range_forward:
+                    dist_to_enemy = distance((self.x, self.y), (enemy.x, enemy.y))
+                    if self.world.debug:
+                        print(f"[SWARM][obs] id={self.id} detected enemy={enemy.id} dist={dist_to_enemy:.3f} angle_diff={angle_diff:.1f}")
                     feat = np.array([enemy.x, enemy.y, enemy.vel_vec[0], enemy.vel_vec[1]], dtype=np.float32)
                     self.observations.append(feat)
 
@@ -393,12 +478,21 @@ class SwarmUUV(UUV):
             vx = float(enemy[2])
             vy = float(enemy[3])
 
-            enemy_feat = [rx, ry, vx, vy]
+            # Normalize relative positions and velocities to keep magnitudes reasonable for NN
+            # Use sonar_range_forward as a rough distance scale
+            scale = max(1.0, float(self.sonar_range_forward))
+            rx_n = rx / scale
+            ry_n = ry / scale
+            # velocities—scale down assuming typical velocities are small
+            vx_n = vx / 5.0
+            vy_n = vy / 5.0
+
+            enemy_feat = [rx_n, ry_n, vx_n, vy_n]
             enemy_feats.append(enemy_feat)
 
         if len(enemy_feats) == 0:
-            # no enemies → give a single zero enemy
-            return np.zeros((1, 4), dtype=np.float32)
+            # no enemies → return empty array (handled by attention mechanism)
+            return np.zeros((0, 4), dtype=np.float32)
         return np.array(enemy_feats, dtype=np.float32)
 
     def send_message_to_world(self, message):
@@ -448,6 +542,8 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, EnemyUUV):
+                        if self.world.debug:
+                            print(f"[SWARM][collision] id={self.id} collided_with_enemy id={u.id} reward=15")
                         self.world.set_reward(self.id, 15)
                     elif isinstance(u, SwarmUUV):
                         # self.world.set_reward(self.id, -0.5)
@@ -584,7 +680,7 @@ def dist_point_to_segment(px, py, x1, y1, x2, y2):
     b = c1 / c2
     bx = x1 + b * vx
     by = y1 + b * vy
-    return (px - bx)**2 + (py - by)**2
+    return ( (px - bx)**2 + (py - by)**2 )**0.5
 
 class ColorAllocator:
     def __init__(self):
@@ -609,7 +705,6 @@ class ColorAllocator:
             return c
         else:
             # fallback if exhausted
-            import random
             return (random.randint(0,255),
                     random.randint(0,255),
                     random.randint(0,255))

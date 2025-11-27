@@ -6,11 +6,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 import random
 
-# Toggle debugging prints for attention
-DEBUG_ATTENTION = False
-_ATT_DEBUG_COUNT = 0
-
-
 class MADDPGAgent:
     def __init__(self, state_dim, feats_dim_1d, action_dim, max_action, epsilon, lr=1e-3,
                  gamma=0.95, tau=0.01):
@@ -41,17 +36,24 @@ class MADDPGAgent:
         enemy_feats: (N, feats_dim_1d) numpy
         state:       (state_dim,)     numpy
         """
-        enemy_feats = torch.tensor(enemy_feats, dtype=torch.float32)   # (N, feats_dim_1d)
-        state = torch.tensor(state, dtype=torch.float32)               # (state_dim,)
+        # convert to tensors and move to actor device
+        device = next(self.actor.parameters()).device
+        enemy_feats = torch.as_tensor(enemy_feats, dtype=torch.float32, device=device)
+        state = torch.as_tensor(state, dtype=torch.float32, device=device)
 
         action = self.actor(enemy_feats, state).detach().cpu().numpy()
 
-        # exploration
+        # exploration (additive Gaussian noise around policy output, clipped)
         exploring = False
         if random.random() < self.epsilon:
             exploring = True
-            noise_std = self.max_action
-            action = np.asarray(np.random.normal(0, noise_std, size=self.action_dim))
+            # smaller exploration noise to avoid huge random jumps (was 0.5 * max_action)
+            # reduce further to avoid large jumps that destabilize motion
+            noise_std = 0.1 * float(self.max_action)
+            action = action + np.random.normal(0, noise_std, size=self.action_dim)
+
+        # Clip per-component to reasonable bounds so waypoints don't explode
+        action = np.clip(action, -float(self.max_action), float(self.max_action))
 
         return action, exploring
 
@@ -134,7 +136,9 @@ class Actor(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
 
-        direction = F.normalize(self.dir(x), dim=-1)
+        dir_output = self.dir(x)
+        # Normalize direction for both batched and single cases (works for both (B, 2) and (2,))
+        direction = F.normalize(dir_output, p=2, dim=-1)
         actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
         result = direction * actual_distance
 
@@ -190,7 +194,7 @@ class AttentionPool(nn.Module):
         N = enemy_feats.shape[0]
 
         if N == 0:
-            # No enemies → return zero embedding
+            # No enemies → return zero embedding (network learns to handle this)
             return torch.zeros(self.embed_dim, device=device)
 
         K = self.key(enemy_feats)   # (N, D)
@@ -247,15 +251,30 @@ class AttentionPool(nn.Module):
         # Attention logits: (B, maxN)
         attn_logits = torch.einsum("bnd,bd->bn", K, query_batch) + distance_bias
 
-        # Mask invalid entries
+        # Mask invalid entries. If a row has ALL entries masked, avoid NaNs by
+        # setting logits to zero for that row before softmax; after masking
+        # we'll set weights for masked positions to zero which yields a zero
+        # pooled embedding for that row.
         attn_logits = attn_logits.masked_fill(~mask, float('-inf'))
 
-        # Softmax over enemies
+        # detect rows where all positions are masked
+        all_masked_rows = (~mask).all(dim=1)
+        if all_masked_rows.any():
+            # temporarily set logits to 0 for fully-masked rows to prevent NaNs
+            attn_logits[all_masked_rows] = 0.0
+
+        # Softmax over enemies (safe now)
         attn_weights = F.softmax(attn_logits, dim=1)
+        # Zero-out masked positions
         attn_weights = attn_weights.masked_fill(~mask, 0.0)
 
         # Weighted pooling
         pooled = (attn_weights.unsqueeze(-1) * V).sum(dim=1)  # (B, D)
+
+        # Ensure fully-masked rows have zero embedding
+        if all_masked_rows.any():
+            pooled[all_masked_rows] = 0.0
+
         return pooled
 
 
@@ -277,6 +296,10 @@ def pad_and_stack(feats_list):
 
     B = len(feats_list)
     maxN = max(f.shape[0] for f in feats_list)
+
+    # Handle edge case where all agents have no observations
+    if maxN == 0:
+        maxN = 1  # Create at least one slot for padding, mask will be False
 
     padded = torch.zeros(B, maxN, feat_dim, device=device)
     mask   = torch.zeros(B, maxN, dtype=torch.bool, device=device)
@@ -301,11 +324,15 @@ def normalize_feats(f):
     """
     f = torch.as_tensor(f, dtype=torch.float32)
 
+    # If empty input (no elements) return explicit empty (0, feat_dim)
+    if f.numel() == 0:
+        return torch.zeros(0, 4, dtype=torch.float32, device=f.device)
+
     if f.dim() == 1:
         return f.unsqueeze(0)  # (1, feat_dim)
 
     if f.dim() == 2:
         return f
 
-    # Empty or weird → (0, 4) as a safe default
+    # Fallback: return empty (0, 4)
     return torch.zeros(0, 4, dtype=torch.float32, device=f.device)
