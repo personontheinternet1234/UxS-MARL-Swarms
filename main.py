@@ -222,9 +222,9 @@ for episode in range(episodes):
             if keys[pygame.K_s]:
                 my_world.controllable_uuv.decrease_throttle()
             if keys[pygame.K_a]:
-                my_world.controllable_uuv.turn_left()
+                my_world.controllable_uuv.turn_left(3)
             if keys[pygame.K_d]:
-                my_world.controllable_uuv.turn_right()
+                my_world.controllable_uuv.turn_right(3)
         if keys[pygame.K_v]:
             mouse_x, mouse_y = pygame.mouse.get_pos()
             dir = np.array([random.uniform(-1,1),random.uniform(-1,1)])
