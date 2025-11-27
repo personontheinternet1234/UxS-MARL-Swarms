@@ -87,7 +87,7 @@ def load_weights(flag):
 
 # hyperparameters
 personal_state_dim = 6
-observed_object_state_dim = 5
+observed_object_state_dim = 6  # rel_x, rel_y, vel_x, vel_y, attractiveness, enemy_here?
 observable_enemies = 8
 observable_friendlies = 5
 total_state_dim = personal_state_dim + observed_object_state_dim * (observable_enemies + observable_friendlies)

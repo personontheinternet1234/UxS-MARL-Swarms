@@ -383,7 +383,10 @@ class SwarmUUV(UUV):
             n = selected_deltas.shape[0]
             enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
             enemies[:n, 0:2] = selected_deltas
-            enemies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+            enemies[:n, 2:self.world.observed_object_state_dim - 2] = selected[:, 2:self.world.observed_object_state_dim - 2]
+            dists_selected = np.linalg.norm(selected_deltas[:, :2], axis=1)
+            safe_dists = np.maximum(dists_selected, 1e-6)
+            enemies[:n, self.world.observed_object_state_dim - 2] = attraction_calculation(safe_dists)  # attractiveness
             enemies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
 
             smallest_dist = dists[idx[0]]
@@ -418,7 +421,10 @@ class SwarmUUV(UUV):
             n = selected_deltas.shape[0]
             friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
             friendlies[:n, 0:2] = selected_deltas
-            friendlies[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+            friendlies[:n, 2:self.world.observed_object_state_dim - 2] = selected[:, 2:self.world.observed_object_state_dim - 2]
+            dists_selected = np.linalg.norm(selected_deltas[:, :2], axis=1)
+            safe_dists = np.maximum(dists_selected, 1e-6)
+            enemies[:n, self.world.observed_object_state_dim - 2] = attraction_calculation(safe_dists)  # attractiveness
             friendlies[:n, self.world.observed_object_state_dim - 1] = 1.0  # uuv actually here, not padded / otherwise 0
         else:
             friendlies = np.zeros((self.world.observable_friendlies, self.world.observed_object_state_dim), dtype=np.float32)
@@ -621,6 +627,11 @@ class Barrier(Particle):
         end_y = self.y + int(0.5 * (self.radius * self.direction[1]))
         pygame.draw.line(self.screen, self.color, (start_x, start_y), (end_x, end_y), 3)
 
+def attraction_calculation(distances_vector):
+    # return np.maximum(100 / np.maximum(distances_vector, 1e-6), 2)
+    L = 95
+    return np.where(distances_vector > L, 10 / distances_vector, 10 - 0.1 * distances_vector)
+
 def normalize_vector_l2(vector):
     norm = np.linalg.norm(vector)
     if norm == 0:
@@ -659,8 +670,8 @@ class ColorAllocator:
         (60, 180, 75), (255, 225, 25), (0, 130, 200),
         (245, 130, 48), (145, 30, 180), (70, 240, 240), (240, 50, 230),
         (210, 245, 60), (250, 190, 190), (0, 128, 128), (230, 190, 255),
-        (170, 110, 40), (255, 250, 200), (128, 0, 0), (170, 255, 195),
-        (128, 128, 0), (255, 215, 180), (0, 0, 128), (128, 128, 128),
+        (170, 110, 40), (255, 250, 200), (164, 0, 0), (170, 255, 195),
+        (128, 128, 0), (255, 215, 180), (128, 128, 128),
         (255, 255, 255), (100, 149, 237), (255, 140, 0),
         (34, 139, 34), (186, 85, 211), (72, 61, 139),
         (218, 165, 32), (127, 255, 212), (199, 21, 133), (30, 144, 255),
