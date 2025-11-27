@@ -51,7 +51,7 @@ def load_weights(flag):
 # hyperparameters
 state_dim = 16
 action_dim = 2
-max_action = 20
+max_action = 50
 batch_size = 200
 epsilon = 0.5
 epsilon_decay = 0.995
@@ -69,8 +69,7 @@ decision_making_ans = None
 
 update_after = 1500
 use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
-show_sim_interval = 5
-
+show_sim_interval = 1
 
 # outside stuff
 load_weights_ans = 0

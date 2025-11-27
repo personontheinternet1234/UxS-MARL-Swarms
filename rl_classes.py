@@ -34,8 +34,9 @@ class MADDPGAgent:
         exploring = False
         if random.random() < self.epsilon:
             exploring = True
-            action = np.random.normal(0, self.max_action, size=self.action_dim)
-        return [exploring, action]
+            noise_std = float(self.max_action)
+            action = action + np.random.normal(0, noise_std, size=self.action_dim)
+        return (exploring, action)
 
     def soft_update(self, target, source):
         for target_param, param in zip(target.parameters(), source.parameters()):
@@ -56,7 +57,7 @@ class Actor(nn.Module):
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
 
-        direction = F.normalize(self.dir(x), dim=-1)
+        direction = F.normalize(self.dir(x) + 1e-8, dim=-1)
         actual_distance = torch.sigmoid(self.distance(x)) * self.max_action
 
         delta = direction * actual_distance

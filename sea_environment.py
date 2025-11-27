@@ -31,7 +31,7 @@ class World():
 
         self.agent_rewards = {}  # {agent_id: reward}
 
-        self.use_policy_after = 50  # default ticks before policy used - tends to be changed
+        self.use_policy_after = 10  # default ticks before policy used - tends to be changed
 
         self.color_allocator = ColorAllocator()
 
@@ -41,9 +41,9 @@ class World():
         self.agent_rewards[agent_id] = 0  # reset to default
         return reward
 
-    def set_reward(self, agent_id, reward):
+    def add_reward(self, agent_id, reward):
         """Accumulate rewards for an agent"""
-        self.agent_rewards[agent_id] = reward
+        self.agent_rewards[agent_id] = self.agent_rewards.get(agent_id, 0.0) + reward
 
     def add_swarm_uuv_random(self, color, policy_net):
         x = random.randint(50, self.screen_width - 50)
@@ -78,10 +78,10 @@ class World():
         self.add_barrier(x, y, unit_vec_dir, width, color)
 
     def add_particle(self, x, y, radius, color):
-        self.particles.append(Particle(x, y, radius, color, self, self.screen))
+        self.particles.append(Particle(x, y, radius, color, self))
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
-        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, self.max_hops, color, policy_net, self, self.screen, self.id_tracker)
+        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, self.max_hops, color, policy_net, self, self.id_tracker)
         self.uuvs.append(uuv)
         self.uuv_lookup[uuv.id] = uuv
         self.id_tracker += 1
@@ -93,14 +93,14 @@ class World():
         self.id_tracker += 1
 
     def add_enemy_uuv(self, x, y, color, decision_making):
-        self.uuvs.append(EnemyUUV(x, y, [0,1], 7, color, decision_making, self, self.screen, self.id_tracker))
+        self.uuvs.append(EnemyUUV(x, y, [0,1], 7, color, decision_making, self, self.id_tracker))
         self.id_tracker += 1
 
     def add_explosion(self, x, y, duration, radius, color):
-        self.explosions.append(Explosion(x, y, duration, radius, color, self, self.screen))
+        self.explosions.append(Explosion(x, y, duration, radius, color, self))
 
     def add_barrier(self, x, y, direction, radius, color):
-        self.barriers.append(Barrier(x, y, direction, radius, color, self, self.screen))
+        self.barriers.append(Barrier(x, y, direction, radius, color, self))
 
     def world_send_message_handling(self, asking_uuv, message):
         for u in self.uuvs:
@@ -148,9 +148,9 @@ class World():
 
 class Particle:
 
-    def __init__(self, startx, starty, radius, color, world:World, screen):
+    def __init__(self, startx, starty, radius, color, world:World):
         self.world = world
-        self.screen = screen
+        self.screen = world.screen
 
         self.x = startx
         self.y = starty
@@ -164,8 +164,8 @@ class Particle:
 
 class UUV(Particle):
 
-    def __init__(self, startx, starty, direction, radius, color, world:World, screen, id):
-        super().__init__(startx, starty, radius, color, world, screen)
+    def __init__(self, startx, starty, direction, radius, color, world:World, id):
+        super().__init__(startx, starty, radius, color, world)
 
         self.id = id
 
@@ -175,11 +175,15 @@ class UUV(Particle):
 
         self.acl_vec = np.array([0, 0])
 
+        self.max_speed = 1
+
+        self.max_throttle = 0.1
+
         self.waypoints = []
 
         self.tick_counter = 0
 
-        self.spawn_prot = 100
+        self.spawn_prot = 0
 
     def tick(self):
         super().tick()
@@ -205,14 +209,14 @@ class UUV(Particle):
     def decrease_throttle(self, value=0.05):
         self.acl_vec = np.multiply(-1 * value, self.direction)
 
-    def turn_left(self):
+    def turn_left(self, value):
         current_angle = self.get_current_angle()
-        new_angle = current_angle - 3
+        new_angle = current_angle - value
         self.set_angle_instantly(new_angle)
 
-    def turn_right(self):
+    def turn_right(self, value):
         current_angle = self.get_current_angle()
-        new_angle = current_angle + 3
+        new_angle = current_angle + value
         self.set_angle_instantly(new_angle)
 
     def set_angle_instantly(self, angle):
@@ -265,30 +269,33 @@ class UUV(Particle):
                 self.vel_vec = np.array([0,0])
             else:
                 # not yet arrived at waypoint
-                pygame.draw.circle(self.screen, (150, 150, 150), (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
-                pygame.draw.line(self.screen, (150, 150, 150), (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
+                last_waypoint = (self.x, self.y)
+                for waypoint in self.waypoints:
+                    pygame.draw.circle(self.screen, (150, 150, 150), waypoint, 2 * self.radius / 3)
+                    pygame.draw.line(self.screen, (150, 150, 150), last_waypoint, waypoint, 2)
+                    last_waypoint = waypoint
 
                 current_angle = self.get_current_angle()
                 desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
                 angle_diff = (desired_angle - current_angle + 180) % 360 - 180
                 distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
 
-                if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
-                    if np.linalg.norm(self.vel_vec) < 1:  # if not yet at max speed
-                        self.increase_throttle(0.1)
+                if abs(angle_diff) < 3:  # if pointing generally the right direction
+                    if np.linalg.norm(self.vel_vec) < self.max_speed:  # if not yet at max speed
+                        self.increase_throttle(self.max_throttle)
                 else:
                     if angle_diff > 0:
-                        self.turn_right()
+                        self.turn_right(3)
                     else:
-                        self.turn_left()
+                        self.turn_left(3)
 
     def get_current_angle(self):
         return math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
 
 class SwarmUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent:MADDPGAgent, world: World, screen, id):
-        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+    def __init__(self, startx, starty, direction, radius, sonar_range_forward, max_hops, color, maddpg_agent:MADDPGAgent, world: World, id):
+        super().__init__(startx, starty, direction, radius, color, world, id)
 
         self.mesh = {}
 
@@ -310,9 +317,11 @@ class SwarmUUV(UUV):
 
         self.ttl = max_hops  # time to live / hops before message stops traveling
 
+        self.exploring = False
+
     def tick(self):
         if self.tick_counter % self.world.use_policy_after == 0:
-            self.world.set_reward(self.id, -0.05)
+            self.world.add_reward(self.id, -0.1)
 
         # observing
         self.collect_observations()
@@ -366,7 +375,7 @@ class SwarmUUV(UUV):
                 self.nearest_target = closest_enemy
 
         if smallest_dist < self.last_distance:
-            self.world.set_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
+            self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
             self.last_distance = smallest_dist
 
         delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
@@ -375,14 +384,12 @@ class SwarmUUV(UUV):
 
     def take_action(self):
         state = self.get_state()
-        action_data = self.maddpg_agent.select_action(state)
-
-        exploring = action_data[0]
-        delta_x, delta_y = action_data[1]
+        self.exploring, action = self.maddpg_agent.select_action(state)
+        delta_x, delta_y = action
 
         self.waypoints = []
-        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y), exploring])
-        self.current_action = action_data[1]
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
+        self.current_action = action
 
     def collect_observations(self):
         self.observations = []
@@ -432,32 +439,6 @@ class SwarmUUV(UUV):
             else:
                 self.mesh[friendly_id] -= 1
 
-    def go_to_waypoint(self):
-        if len(self.waypoints) > 0:
-            if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < (self.radius):
-                # arrived at waypoint
-                self.waypoints.pop(0)
-                self.vel_vec = np.array([0,0])
-            else:
-                # not yet arrived at waypoint
-                color = (120,210,120) if self.waypoints[0][2] == True else (150,150,150)
-                pygame.draw.circle(self.screen, color, (self.waypoints[0][0], self.waypoints[0][1]), 2 * self.radius / 3)
-                pygame.draw.line(self.screen, color, (self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]), 2)
-
-                current_angle = self.get_current_angle()
-                desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
-                angle_diff = (desired_angle - current_angle + 180) % 360 - 180
-                distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
-
-                if abs(current_angle - desired_angle) < 3:  # if pointing generally the right direction
-                    if np.linalg.norm(self.vel_vec) < 2:  # if not yet at max speed
-                        self.increase_throttle(0.2)
-                else:
-                    if angle_diff > 0:
-                        self.turn_right()
-                    else:
-                        self.turn_left()
-
     def check_collision(self):
         if self.tick_counter < self.spawn_prot:
             return
@@ -467,9 +448,9 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
                     if isinstance(u, EnemyUUV):
-                        self.world.set_reward(self.id, 15)
+                        self.world.add_reward(self.id, 15)
                     elif isinstance(u, SwarmUUV):
-                        self.world.set_reward(self.id, -1)
+                        self.world.add_reward(self.id, -1)
 
         for b in self.world.barriers:
             b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
@@ -478,7 +459,7 @@ class SwarmUUV(UUV):
             b_end_y = b.y + int(0.5 * (b.radius * b.direction[1]))
             if dist_point_to_segment(self.x, self.y, b_start_x, b_start_y, b_end_x, b_end_y,) <= self.radius:
                 self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
-                self.world.set_reward(self.id, -1.0)
+                self.world.add_reward(self.id, -5)
 
         for e in self.world.explosions:
             if (self.radius + e.radius) > distance((self.x, self.y), (e.x, e.y)):
@@ -486,8 +467,8 @@ class SwarmUUV(UUV):
 
 class EnemyUUV(UUV):
 
-    def __init__(self, startx, starty, direction, radius, color, decision_making, world: World, screen, id):
-        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+    def __init__(self, startx, starty, direction, radius, color, decision_making, world: World, id):
+        super().__init__(startx, starty, direction, radius, color, world, id)
         self.decision_making = decision_making
 
     def tick(self):
@@ -512,8 +493,8 @@ class EnemyUUV(UUV):
         if self.decision_making == "static":
             ...
         elif self.decision_making == "random":
-            if self.tick_counter % 250 == 0:
-                self.waypoints = []
+            if self.tick_counter % 100 == 0:
+                self.waypoints = [self.waypoints[0]] if len(self.waypoints) > 0 else []
                 x, y = random.randint(10, self.world.screen_width - 10), random.randint(10, self.world.screen_height - 10)
                 self.waypoints.append((x, y))
         elif self.decision_making == "escape":
@@ -531,10 +512,35 @@ class EnemyUUV(UUV):
             pygame.draw.circle(self.screen, seen, (self.x, self.y), 1.3 * self.radius)
         super().tick()
 
+    def go_to_waypoint(self):
+        if len(self.waypoints) > 0:
+            if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < (self.radius):
+                # arrived at waypoint
+                self.waypoints.pop(0)
+            else:
+                # not yet arrived at waypoint
+                last_waypoint = (self.x, self.y)
+                for waypoint in self.waypoints:
+                    pygame.draw.circle(self.screen, (150, 150, 150), waypoint, 2 * self.radius / 3)
+                    pygame.draw.line(self.screen, (150, 150, 150), last_waypoint, waypoint, 2)
+                    last_waypoint = waypoint
+
+                current_angle = self.get_current_angle()
+                desired_angle = math.atan2(self.waypoints[0][1] - self.y, self.waypoints[0][0] - self.x) * 180 / math.pi
+                angle_diff = (desired_angle - current_angle + 180) % 360 - 180
+                distance_to_waypoint = distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1]))
+
+                if np.linalg.norm(self.vel_vec) < self.max_speed:  # if not yet at max speed
+                    self.increase_throttle(self.max_throttle)
+                if angle_diff > 0:
+                    self.turn_right(2)
+                else:
+                    self.turn_left(2)
+
 class ControllableUUV(UUV):
 
     def __init__(self, startx, starty, direction, radius, color, world: World, screen, id):
-        super().__init__(startx, starty, direction, radius, color, world, screen, id)
+        super().__init__(startx, starty, direction, radius, color, world, id)
 
     def tick(self):
         self.color = (200, 200, 200)
@@ -549,8 +555,8 @@ class ControllableUUV(UUV):
 
 class Explosion(Particle):
 
-    def __init__(self, startx, starty, duration, radius, color, world:World, screen):
-        super().__init__(startx, starty, radius, color, world, screen)
+    def __init__(self, startx, starty, duration, radius, color, world:World):
+        super().__init__(startx, starty, radius, color, world)
         self.lifetime = duration
 
     def tick(self):
@@ -561,8 +567,8 @@ class Explosion(Particle):
 
 class Barrier(Particle):
 
-    def __init__(self, startx, starty, direction, radius, color, world:World, screen):
-        super().__init__(startx, starty, radius, color, world, screen)
+    def __init__(self, startx, starty, direction, radius, color, world:World):
+        super().__init__(startx, starty, radius, color, world)
         self.direction = direction
 
     def tick(self):
@@ -602,7 +608,7 @@ def dist_point_to_segment(px, py, x1, y1, x2, y2):
     b = c1 / c2
     bx = x1 + b * vx
     by = y1 + b * vy
-    return (px - bx)**2 + (py - by)**2
+    return ((px - bx)**2 + (py - by)**2)**0.5
 
 class ColorAllocator:
     def __init__(self):
