@@ -33,16 +33,19 @@ class World():
 
         self.use_policy_after = 10  # default ticks before policy used - tends to be changed
 
+        self.personal_state_dim = 6
+        self.observed_object_state_dim = 5
+        self.observable_enemies = 5
+        self.observable_friendlies = 0
+
         self.color_allocator = ColorAllocator()
 
     def get_and_clear_reward(self, agent_id):
-        """Get accumulated reward and reset"""
         reward = self.agent_rewards.get(agent_id, 0)
         self.agent_rewards[agent_id] = 0  # reset to default
         return reward
 
     def add_reward(self, agent_id, reward):
-        """Accumulate rewards for an agent"""
         self.agent_rewards[agent_id] = self.agent_rewards.get(agent_id, 0.0) + reward
 
     def add_swarm_uuv_random(self, color, policy_net):
@@ -176,10 +179,12 @@ class UUV(Particle):
         self.acl_vec = np.array([0, 0])
 
         self.max_speed = 1
-
         self.max_throttle = 0.1
+        self.turn_rate = 3
 
         self.waypoints = []
+
+        self.waypoint_color = (150, 150, 150)
 
         self.tick_counter = 0
 
@@ -271,8 +276,8 @@ class UUV(Particle):
                 # not yet arrived at waypoint
                 last_waypoint = (self.x, self.y)
                 for waypoint in self.waypoints:
-                    pygame.draw.circle(self.screen, (150, 150, 150), waypoint, 2 * self.radius / 3)
-                    pygame.draw.line(self.screen, (150, 150, 150), last_waypoint, waypoint, 2)
+                    pygame.draw.circle(self.screen, self.waypoint_color, waypoint, 2 * self.radius / 3)
+                    pygame.draw.line(self.screen, self.waypoint_color, last_waypoint, waypoint, 2)
                     last_waypoint = waypoint
 
                 current_angle = self.get_current_angle()
@@ -285,9 +290,9 @@ class UUV(Particle):
                         self.increase_throttle(self.max_throttle)
                 else:
                     if angle_diff > 0:
-                        self.turn_right(3)
+                        self.turn_right(self.turn_rate)
                     else:
-                        self.turn_left(3)
+                        self.turn_left(self.turn_rate)
 
     def get_current_angle(self):
         return math.atan2(self.direction[1], self.direction[0]) * 180 / math.pi
@@ -317,8 +322,6 @@ class SwarmUUV(UUV):
 
         self.ttl = max_hops  # time to live / hops before message stops traveling
 
-        self.exploring = False
-
     def tick(self):
         if self.tick_counter % self.world.use_policy_after == 0:
             self.world.add_reward(self.id, -0.1)
@@ -342,55 +345,6 @@ class SwarmUUV(UUV):
         # physics, collision
         super().tick()
 
-    def get_state(self):
-        """Returns the current state vector"""
-        smallest_dist = float("inf")
-        closest_friendly = np.zeros(2 + len(self.vel_vec) + 1)
-        for swarmuuv in self.world.uuvs:
-            if isinstance(swarmuuv, SwarmUUV) and swarmuuv.id != self.id:
-                tested_dist = distance((self.x, self.y), (swarmuuv.x, swarmuuv.y))
-                if tested_dist < smallest_dist:
-                    smallest_dist = tested_dist
-                    closest_friendly = np.hstack([swarmuuv.x, swarmuuv.y, swarmuuv.vel_vec, 1])
-
-        delta_friendly = [closest_friendly[0] - self.x, closest_friendly[1] - self.y, closest_friendly[2], closest_friendly[3], closest_friendly[4]]
-
-        full_obs = []
-        if not self.world.mesh_ans:
-            for uuv in self.world.uuvs:
-                if isinstance(uuv, SwarmUUV) and len(uuv.observations) > 0:
-                    full_obs.append(uuv.observations)
-            if len(full_obs) > 0:
-                full_obs = np.concatenate(full_obs)
-        else:
-            full_obs = self.observations
-
-        smallest_dist = float("inf")
-        closest_enemy = np.zeros(2 + len(self.vel_vec) + 1)
-        for observation in full_obs:
-            tested_dist = distance((self.x, self.y), (observation[0], observation[1]))
-            if tested_dist < smallest_dist:
-                smallest_dist = tested_dist
-                closest_enemy = [observation[0], observation[1], observation[2], observation[3], 1]  # x, y, vel_vel, true
-                self.nearest_target = closest_enemy
-
-        if smallest_dist < self.last_distance:
-            self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
-            self.last_distance = smallest_dist
-
-        delta_enemy = [closest_enemy[0] - self.x, closest_enemy[1] - self.y, closest_enemy[2], closest_enemy[3], closest_enemy[4]]
-
-        return np.hstack([delta_enemy, delta_friendly, self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
-
-    def take_action(self):
-        state = self.get_state()
-        self.exploring, action = self.maddpg_agent.select_action(state)
-        delta_x, delta_y = action
-
-        self.waypoints = []
-        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
-        self.current_action = action
-
     def collect_observations(self):
         self.observations = []
         for enemy in self.world.uuvs:
@@ -400,6 +354,61 @@ class SwarmUUV(UUV):
                 angle_diff = abs(angle_to_enemy - current_angle)
                 if angle_diff < self.observation_cone and distance((self.x, self.y), (enemy.x, enemy.y)) <= self.sonar_range_forward:
                     self.observations.append(np.hstack([enemy.x, enemy.y, enemy.vel_vec]))
+
+    def get_personal_state(self):
+        return np.hstack([self.direction, self.vel_vec, self.acl_vec]).astype(np.float32)
+
+    def get_observation_state(self):
+        if not self.world.mesh_ans:
+            full_obs = [
+                uuv.observations
+                for uuv in self.world.uuvs
+                if isinstance(uuv, SwarmUUV) and len(uuv.observations) > 0
+            ]
+            full_obs = np.concatenate(full_obs) if len(full_obs) > 0 else np.empty((0, self.world.observed_object_state_dim - 1))
+        else:
+            full_obs = np.asarray(self.observations, dtype=np.float32)
+
+        if len(full_obs) == 0:
+            return np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
+
+        enemy_positions = full_obs[:, :2]                     # (N, 2)
+        deltas = enemy_positions - np.array([self.x, self.y]) # (N, 2)
+        dists = np.linalg.norm(deltas, axis=1)                # (N,)
+
+        idx = np.argsort(dists)[:self.world.observable_enemies]
+
+        selected = full_obs[idx]                              # (k, 4)
+        selected_deltas = deltas[idx]                         # (k, 2)
+
+        n = selected_deltas.shape[0]
+
+        result = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
+        result[:n, 0:2] = selected_deltas
+        result[:n, 2:self.world.observed_object_state_dim - 1] = selected[:, 2:self.world.observed_object_state_dim - 1]
+        result[:n, self.world.observed_object_state_dim - 1] = 1.0
+
+        smallest_dist = dists[idx[0]]
+        if smallest_dist < self.last_distance:
+            self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
+            self.last_distance = smallest_dist
+        return result
+
+    def get_state(self):
+        personal_state = self.get_personal_state()
+        observation_state = self.get_observation_state().flatten()
+        return np.concatenate([personal_state, observation_state])
+
+    def take_action(self):
+        state = self.get_state()
+        exploring, action = self.maddpg_agent.select_action(state)
+        self.waypoint_color = (100, 200, 100) if exploring else (150, 150, 150)
+        delta_x, delta_y = action
+
+        self.waypoints = []
+        self.add_waypoint([float(self.x + delta_x), float(self.y + delta_y)])
+
+        self.current_action = action
 
     def send_message_to_world(self, message):
         self.world.world_send_message_handling(self, message)
@@ -470,9 +479,10 @@ class EnemyUUV(UUV):
     def __init__(self, startx, starty, direction, radius, color, decision_making, world: World, id):
         super().__init__(startx, starty, direction, radius, color, world, id)
         self.decision_making = decision_making
+        self.color = (200, 30, 30)
+        self.waypoint_color = (190, 100, 100)
 
     def tick(self):
-        self.color = (200, 30, 30)
         seen = None
 
         smallest_dist = float("inf")
@@ -516,13 +526,14 @@ class EnemyUUV(UUV):
         if len(self.waypoints) > 0:
             if distance((self.x, self.y), (self.waypoints[0][0], self.waypoints[0][1])) < (self.radius):
                 # arrived at waypoint
+                # no stopping once here
                 self.waypoints.pop(0)
             else:
                 # not yet arrived at waypoint
                 last_waypoint = (self.x, self.y)
                 for waypoint in self.waypoints:
-                    pygame.draw.circle(self.screen, (150, 150, 150), waypoint, 2 * self.radius / 3)
-                    pygame.draw.line(self.screen, (150, 150, 150), last_waypoint, waypoint, 2)
+                    pygame.draw.circle(self.screen, self.waypoint_color, waypoint, 2 * self.radius / 3)
+                    pygame.draw.line(self.screen, self.waypoint_color, last_waypoint, waypoint, 2)
                     last_waypoint = waypoint
 
                 current_angle = self.get_current_angle()
@@ -533,9 +544,9 @@ class EnemyUUV(UUV):
                 if np.linalg.norm(self.vel_vec) < self.max_speed:  # if not yet at max speed
                     self.increase_throttle(self.max_throttle)
                 if angle_diff > 0:
-                    self.turn_right(2)
+                    self.turn_right(self.turn_rate)
                 else:
-                    self.turn_left(2)
+                    self.turn_left(self.turn_rate)
 
 class ControllableUUV(UUV):
 

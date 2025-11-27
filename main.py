@@ -27,29 +27,70 @@ class ReplayBuffer:
 
 def load_weights(flag):
     if flag:
-        checkpoint = torch.load("models/weights.pt", weights_only=False)
-        params = checkpoint['hyperparameters']
-        maddpg_agent = MADDPGAgent( params['state_dim'], params['action_dim'], params['max_action'], epsilon, gamma=params['gamma'], tau=params['tau'])
-        maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
-        maddpg_agent.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
-        maddpg_agent.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        # Load checkpoint on CPU (safe) and use saved hyperparameters to reconstruct the agent
+        checkpoint = torch.load("models/weights.pt", map_location="cpu", weights_only=False)
+        params = checkpoint.get('hyperparameters', {})
+        # Try to read hyperparameters from checkpoint, fall back to defaults if missing
+        try:
+            p_sd = int(params.get('personal_state_dim', personal_state_dim))
+            obs_sd = int(params.get('observed_object_state_dim', observed_object_state_dim))
+            obs_en = int(params.get('observable_enemies', observable_enemies))
+            obs_fr = int(params.get('observable_friendlies', observable_friendlies))
+            act_dim = int(params.get('action_dim', action_dim))
+            max_act = float(params.get('max_action', max_action))
+            gamma_p = float(params.get('gamma', gamma))
+            tau_p = float(params.get('tau', 0.01))
+        except Exception as e:
+            print("Warning: could not parse hyperparameters from checkpoint, using defaults:", e)
+            p_sd = personal_state_dim
+            obs_sd = observed_object_state_dim
+            obs_en = observable_enemies
+            obs_fr = observable_friendlies
+            act_dim = action_dim
+            max_act = max_action
+            gamma_p = gamma
+            tau_p = 0.01
 
-        if checkpoint['critic_state_dict'] and maddpg_agent is not None:
-            total_state_dim = state_dim
-            total_action_dim = action_dim
-            maddpg_agent.critic.load_state_dict(checkpoint['critic_state_dict'])
-            maddpg_agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
-            maddpg_agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        maddpg_agent = MADDPGAgent(p_sd, obs_sd, obs_en, obs_fr, act_dim, max_act, epsilon, gamma=gamma_p, tau=tau_p)
+
+        # Load actor (try strict then fall back to non-strict to show mismatches)
+        try:
+            maddpg_agent.actor.load_state_dict(checkpoint['actor_state_dict'])
+            maddpg_agent.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
+            maddpg_agent.actor_optimizer.load_state_dict(checkpoint.get('actor_optimizer_state_dict', {}))
+        except Exception as e:
+            print("Actor load failed:", e)
+            try:
+                res = maddpg_agent.actor.load_state_dict(checkpoint.get('actor_state_dict', {}), strict=False)
+                print("Actor partial load result:", res)
+            except Exception as e2:
+                print("Actor partial load also failed:", e2)
+
+        # Load critic if present
+        if checkpoint.get('critic_state_dict') is not None:
+            try:
+                maddpg_agent.critic.load_state_dict(checkpoint['critic_state_dict'])
+                maddpg_agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
+                maddpg_agent.critic_optimizer.load_state_dict(checkpoint.get('critic_optimizer_state_dict', {}))
+            except Exception as e:
+                print("Critic load failed:", e)
+                try:
+                    res = maddpg_agent.critic.load_state_dict(checkpoint.get('critic_state_dict', {}), strict=False)
+                    print("Critic partial load result:", res)
+                except Exception as e2:
+                    print("Critic partial load also failed:", e2)
     else:
-        maddpg_agent = MADDPGAgent(state_dim, action_dim, max_action, epsilon, lr=lr, lr_critic=lr, gamma=gamma, tau=0.01)
-        total_state_dim = state_dim
-        total_action_dim = action_dim
+        maddpg_agent = MADDPGAgent(personal_state_dim, observed_object_state_dim, observable_enemies, observable_friendlies, action_dim, max_action, epsilon, lr=lr, lr_critic=lr, gamma=gamma, tau=0.01)
         maddpg_agent.critic_target.load_state_dict(maddpg_agent.critic.state_dict())
 
     return maddpg_agent
 
 # hyperparameters
-state_dim = 16
+personal_state_dim = 6
+observed_object_state_dim = 5
+observable_enemies = 5
+observable_friendlies = 0
+total_state_dim = personal_state_dim + observed_object_state_dim * (observable_enemies + observable_friendlies)
 action_dim = 2
 max_action = 50
 batch_size = 200
@@ -352,7 +393,10 @@ def save_weights():
         'actor_losses': actor_losses,
         'critic_losses': critic_losses,
         'hyperparameters': {
-            'state_dim': state_dim,
+            'personal_state_dim': personal_state_dim,
+            'observed_object_state_dim': observed_object_state_dim,
+            'observable_enemies': observable_enemies,
+            'observable_friendlies': observable_friendlies,
             'action_dim': action_dim,
             'max_action': max_action,
             'gamma': maddpg_agent.gamma,
