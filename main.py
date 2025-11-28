@@ -92,7 +92,7 @@ observable_enemies = 8
 observable_friendlies = 5
 total_state_dim = personal_state_dim + observed_object_state_dim * (observable_enemies + observable_friendlies)
 action_dim = 2
-max_action = 50
+max_action = 25
 batch_size = 200
 epsilon = 0.5
 epsilon_decay = 0.995
@@ -104,13 +104,13 @@ lr = 1e-3
 default_num_agents = 10
 default_num_enemies = 10
 default_num_barriers = 0
-default_episodes = 500
+default_episodes = 1000
 default_ticks = 500
 decision_making_ans = None
 
 update_after = 1500
 use_policy_after = 10  # policy & training is used this many ticks (right now 5x per second)
-show_sim_interval = 1
+show_sim_interval = 5
 
 # outside stuff
 load_weights_ans = 0

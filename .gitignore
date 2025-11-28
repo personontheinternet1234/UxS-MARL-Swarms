@@ -2,3 +2,4 @@
 __pycache__
 models/training_metrics.json
 models/weights.pt
+.pytest_cache

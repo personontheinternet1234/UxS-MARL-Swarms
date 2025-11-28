@@ -83,7 +83,7 @@ class World():
         self.particles.append(Particle(x, y, radius, color, self))
 
     def add_swarm_uuv(self, x, y, direction, color, policy_net):
-        uuv = SwarmUUV(x, y, direction, 5, self.sonar_range_forward, self.max_hops, color, policy_net, self, self.id_tracker)
+        uuv = SwarmUUV(x, y, direction, 3, self.sonar_range_forward, self.max_hops, color, policy_net, self, self.id_tracker)
         self.uuvs.append(uuv)
         self.uuv_lookup[uuv.id] = uuv
         self.id_tracker += 1
@@ -252,7 +252,7 @@ class UUV(Particle):
             if u.id != self.id:
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):  # will need to change later when enemies aren't 1D
                     # explode
-                    self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+                    self.world.add_explosion(self.x, self.y, 25, 5, (255,200,0))
 
     def add_waypoint(self, waypoint):
         if waypoint[0] < 10:
@@ -493,7 +493,7 @@ class SwarmUUV(UUV):
         for u in self.world.uuvs:
             if u.id != self.id:
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
-                    self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+                    self.world.add_explosion(self.x, self.y, 25, 5, (255,200,0))
                     if isinstance(u, EnemyUUV):
                         self.world.add_reward(self.id, 30)
                     elif isinstance(u, SwarmUUV):
@@ -505,7 +505,7 @@ class SwarmUUV(UUV):
             b_end_x = b.x + int(0.5 * (b.radius * b.direction[0]))
             b_end_y = b.y + int(0.5 * (b.radius * b.direction[1]))
             if dist_point_to_segment(self.x, self.y, b_start_x, b_start_y, b_end_x, b_end_y,) <= self.radius:
-                self.world.add_explosion(self.x, self.y, 50, 10, (255,200,0))
+                self.world.add_explosion(self.x, self.y, 25, 5, (255,200,0))
                 self.world.add_reward(self.id, -5)
 
         for e in self.world.explosions:
@@ -631,6 +631,7 @@ def attraction_calculation(distances_vector):
     # return np.maximum(100 / np.maximum(distances_vector, 1e-6), 2)
     L = 95
     return np.where(distances_vector > L, 10 / distances_vector, 10 - 0.1 * distances_vector)
+    # return distances_vector
 
 def normalize_vector_l2(vector):
     norm = np.linalg.norm(vector)
