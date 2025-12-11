@@ -37,6 +37,11 @@ class World():
         self.observable_enemies = 0
         self.observable_friendlies = 0
 
+        self.reward_exist = -0.1
+        self.reward_kill = 20
+        self.reward_collide = -3
+        self.min_reward_closer = 0.2
+
         self.color_allocator = ColorAllocator()
 
     def get_and_clear_reward(self, agent_id):
@@ -327,7 +332,7 @@ class SwarmUUV(UUV):
 
     def tick(self):
         if self.tick_counter % self.world.use_policy_after == 0:
-            self.world.add_reward(self.id, -0.1)
+            self.world.add_reward(self.id, self.world.reward_exist)
 
         # observing
         self.collect_observations()
@@ -391,7 +396,7 @@ class SwarmUUV(UUV):
 
             smallest_dist = dists[idx[0]]
             if smallest_dist < self.last_distance:
-                self.world.add_reward(self.id, min(0.2 * (self.last_distance - smallest_dist), 1.0))
+                self.world.add_reward(self.id, min(self.world.min_reward_closer * (self.last_distance - smallest_dist), 1.0))
                 self.last_distance = smallest_dist
         else:
             enemies = np.zeros((self.world.observable_enemies, self.world.observed_object_state_dim), dtype=np.float32)
@@ -495,9 +500,9 @@ class SwarmUUV(UUV):
                 if (self.radius + u.radius) > distance((self.x, self.y), (u.x, u.y)):
                     self.world.add_explosion(self.x, self.y, 25, 5, (255,200,0))
                     if isinstance(u, EnemyUUV):
-                        self.world.add_reward(self.id, 30)
+                        self.world.add_reward(self.id, self.world.reward_kill)
                     elif isinstance(u, SwarmUUV):
-                        self.world.add_reward(self.id, -5)
+                        self.world.add_reward(self.id, self.world.reward_collide)
 
         for b in self.world.barriers:
             b_start_x = b.x - int(0.5 * (b.radius * b.direction[0]))
